@@ -1,0 +1,13 @@
+{
+  "topology": "multi-VM, single physical host (Level 1); not infrastructure independence",
+  "deployed_at": "2026-09-25T10:26:26Z", "git_commit": "b91bf192b2387dd777f6152e044e1c3d64c4f87f", "kid": "vOXUTqA41i4Egs_pTP9gMQ",
+  "coordinator_host": {"vm": "tk8s", "ip": "192.168.252.2"}, "admin_ip": "192.168.252.1",
+  "signer_binary": {"go": "go1.27.1", "goarch": "arm64", "sha256": "0fea90651de9e630489eef48369f125864b3d2a1939c345fe3e98e882ba06478"},
+  "signers": [
+    {"signer_id": 1, "host": "sig-a", "ip": "192.168.252.3", "port": 8441, "os_user": "frost-signer-1", "share_index": 1, "cert_san": "signer-1", "cert_sha256": "47:CD:1D:E7:05:9D:0E:9A:32:F1:BA:24:B3:1C:8E:AD:29:53:22:7D:A1:6E:83:6A:17:4A:91:42:10:94:57:95", "binary_sha256_on_host": "0fea90651de9e630489eef48369f125864b3d2a1939c345fe3e98e882ba06478"},
+    {"signer_id": 2, "host": "sig-a", "ip": "192.168.252.3", "port": 8442, "os_user": "frost-signer-2", "share_index": 2, "cert_san": "signer-2", "cert_sha256": "1D:E2:7C:9B:54:2E:10:B6:F6:0C:C7:59:A6:6D:92:2F:2E:56:FA:26:FD:E6:62:7F:F7:67:46:BC:0D:4F:16:35", "binary_sha256_on_host": "0fea90651de9e630489eef48369f125864b3d2a1939c345fe3e98e882ba06478"},
+    {"signer_id": 3, "host": "sig-b", "ip": "192.168.252.4", "port": 8443, "os_user": "frost-signer-3", "share_index": 3, "cert_san": "signer-3", "cert_sha256": "A1:F6:E0:CC:5A:DC:A1:FD:30:C4:20:3E:25:74:E6:DC:39:40:91:F6:1F:BE:F6:2E:CC:5B:3F:EA:29:C2:81:58", "binary_sha256_on_host": "0fea90651de9e630489eef48369f125864b3d2a1939c345fe3e98e882ba06478"},
+    {"signer_id": 4, "host": "sig-b", "ip": "192.168.252.4", "port": 8444, "os_user": "frost-signer-4", "share_index": 4, "cert_san": "signer-4", "cert_sha256": "B2:6F:17:EF:76:56:88:AC:F0:B2:C6:31:C1:DE:23:D4:07:7C:DF:65:AD:67:7E:66:CA:35:F5:4B:3C:15:0E:78", "binary_sha256_on_host": "0fea90651de9e630489eef48369f125864b3d2a1939c345fe3e98e882ba06478"},
+    {"signer_id": 5, "host": "sig-c", "ip": "192.168.252.5", "port": 8445, "os_user": "frost-signer-5", "share_index": 5, "cert_san": "signer-5", "cert_sha256": "AA:17:28:BC:43:ED:17:9D:93:FD:AF:B3:64:56:90:E3:33:32:AB:B2:46:B6:7C:C4:8B:A1:93:0D:FA:F8:15:03", "binary_sha256_on_host": "0fea90651de9e630489eef48369f125864b3d2a1939c345fe3e98e882ba06478"}
+  ]
+}
