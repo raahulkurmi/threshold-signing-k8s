@@ -32,7 +32,7 @@ mkdir -p "$RESULTS"
 exec > >(tee "$RESULTS/e2e.log") 2>&1
 
 # VERIFY_STRATEGY: the coordinators' default (optimistic + breaker, N65) unless overridden.
-export FROST_UID="$(id -u)" GOTOOLCHAIN=go1.27.1 VERIFY_STRATEGY="${VERIFY_STRATEGY:-optimistic}" SIGN_DEADLINE=2s
+export FROST_UID="$(id -u)" GOTOOLCHAIN=go1.27.2 VERIFY_STRATEGY="${VERIFY_STRATEGY:-optimistic}" SIGN_DEADLINE=2s
 TOPOLOGY="${TOPOLOGY:-single}"
 [[ "$TOPOLOGY" == single || "$TOPOLOGY" == multihost ]] || die "TOPOLOGY must be single or multihost"
 CTL=/tmp/frost-ctl

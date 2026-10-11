@@ -96,7 +96,7 @@ State these whenever you describe the system:
 ## Quick start
 
 Requirements: **Linux host with Docker Engine** (not Docker Desktop), `kind` v0.31.0,
-`kubectl` v1.36.x, Go 1.27.1, `jq`, `openssl`, `gitleaks`. See [NOTES.md](NOTES.md) for
+`kubectl` v1.36.x, Go 1.27.2, `jq`, `openssl`, `gitleaks`. See [NOTES.md](NOTES.md) for
 the exact pinned versions and the locally built `kindest/node:v1.36.5-tk8s` image
 (`kind build node-image --type release v1.36.5`).
 

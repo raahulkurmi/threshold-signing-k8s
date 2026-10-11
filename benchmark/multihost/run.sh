@@ -19,7 +19,7 @@ cd "$(dirname "$0")/../.."
 TOPO="${TOPO:-deploy/multihost/topology.local.env}"
 # shellcheck disable=SC1090
 source "$TOPO"
-export GOTOOLCHAIN=go1.27.1
+export GOTOOLCHAIN=go1.27.2
 N="${N:-1000}" WARMUP="${WARMUP:-100}"
 DELAYS="${DELAYS:-0 20 60 150}"
 CONCS="${CONCS:-1 10 50}"
@@ -89,7 +89,7 @@ on "$COORD_VM" kubectl --context kind-tk8s get --raw /readyz >/dev/null || die "
 on "$COORD_VM" bash -lc "cd ~/tk8s && git rev-parse HEAD" | tr -d '\r' | grep -qx "$SHA" || die "coordinator host clone is not at $SHA"
 
 echo "== build tokenbench on $COORD_VM (pinned toolchain)"
-on "$COORD_VM" bash -lc "cd ~/tk8s/benchmark && GOTOOLCHAIN=go1.27.1 go build -o /tmp/tokenbench ./tokenbench && sha256sum /tmp/tokenbench"
+on "$COORD_VM" bash -lc "cd ~/tk8s/benchmark && GOTOOLCHAIN=go1.27.2 go build -o /tmp/tokenbench ./tokenbench && sha256sum /tmp/tokenbench"
 TOOLS="$(mktemp -d "${TMPDIR:-/tmp}/frost-bench-tools.XXXXXX")"   # never inside the results dir
 ( cd benchmark && go build -o "$TOOLS/summarize" ./summarize )
 

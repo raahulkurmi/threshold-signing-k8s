@@ -2,7 +2,7 @@
 // (github.com/niclabs/tcrsa) produce RS256 JWTs that the verifiers used by
 // kube-apiserver accept? Standalone: no repo internals are imported.
 //
-// Run: GOTOOLCHAIN=go1.27.1 go test -v -count=1 -timeout 60m ./...
+// Run: GOTOOLCHAIN=go1.27.2 go test -v -count=1 -timeout 60m ./...
 // SPIKE_BITS overrides the tcrsa bitSize argument (default 2049, see
 // TestTcrsaModulusIsBitSizeMinusOne for why 2049 yields a 2048-bit modulus).
 package spike

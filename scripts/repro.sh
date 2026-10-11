@@ -20,7 +20,7 @@ set -uo pipefail
 cd "$(dirname "$0")/.."
 REPO="$(pwd)"
 
-GO_VERSION=go1.27.1
+GO_VERSION=go1.27.2
 KIND_VERSION=v0.31.0
 KUBECTL_VERSION=v1.36.5
 GITLEAKS_VERSION=8.30.1

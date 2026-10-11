@@ -1,6 +1,6 @@
 module frost-k8s-threshold-signing/benchmark
 
-go 1.27.1
+go 1.27.2
 
 require (
 	frost-k8s-threshold-signing v0.0.0
@@ -33,7 +33,7 @@ require (
 	github.com/x448/float16 v0.8.4 // indirect
 	go.yaml.in/yaml/v2 v2.4.3 // indirect
 	go.yaml.in/yaml/v3 v3.0.4 // indirect
-	golang.org/x/net v0.59.0 // indirect
+	golang.org/x/net v0.60.0 // indirect
 	golang.org/x/oauth2 v0.36.0 // indirect
 	golang.org/x/sys v0.48.0 // indirect
 	golang.org/x/term v0.46.0 // indirect

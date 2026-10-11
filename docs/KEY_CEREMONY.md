@@ -41,7 +41,7 @@ the wrong key, or a corrupted share, stops the signer from starting.
    from a reviewed commit and record the commit hash:
    ```bash
    git rev-parse HEAD
-   GOTOOLCHAIN=go1.27.1 go build -trimpath -o dealer ./cmd/dealer
+   GOTOOLCHAIN=go1.27.2 go build -trimpath -o dealer ./cmd/dealer
    sha256sum dealer
    ```
 2. **Generate.** Safe-prime generation takes seconds to minutes.
