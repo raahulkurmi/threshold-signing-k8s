@@ -1,95 +1,710 @@
+// Package coordinator collects threshold RSA signature shares from signers
+// and combines them into an RS256 signature.
+//
+// It holds only public metadata (invariant I3): the group public key, the
+// share verification keys, t and n. It must never import a secret-share
+// type; TestCoordinatorHasNoSecretTypes enforces this.
 package coordinator
 
 import (
+	"bytes"
+	"context"
+	"crypto"
+	"crypto/rand"
+	"crypto/rsa"
+	"crypto/sha256"
+	"encoding/base64"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
+	"log/slog"
+	"net/http"
+	"sort"
+	"strconv"
+	"strings"
+	"sync/atomic"
+	"time"
 
-	"frost-k8s-threshold-signing/internal/signer"
-	"frost-k8s-threshold-signing/internal/types"
+	"github.com/niclabs/tcrsa"
+
+	"frost-k8s-threshold-signing/internal/jwtfmt"
+	"frost-k8s-threshold-signing/internal/keymeta"
+	"frost-k8s-threshold-signing/internal/wire"
 )
 
-type Coordinator struct {
-	Signers   []*signer.Signer
-	Threshold int
-}
+// Strategy selects how signature shares are verified (NOTES.md R-c).
+type Strategy string
 
-func New(
-	signers []*signer.Signer,
-	threshold int,
-) *Coordinator {
+const (
+	// Strict verifies shares (in parallel, as they arrive) until t are valid
+	// (verify-until-t, N65), joins them, then verifies the final signature.
+	Strict Strategy = "strict"
+	// Optimistic (the default, N65) joins t well-formed shares and verifies
+	// the final signature; only on failure does it verify each share, exclude
+	// and attribute the bad ones, and retry with the remaining valid shares.
+	// Shares of suspect signers are verified before they may be combined, and
+	// repeated failed combines switch the coordinator to strict (BreakerConfig).
+	Optimistic Strategy = "optimistic"
+)
 
-	return &Coordinator{
-		Signers:   signers,
-		Threshold: threshold,
+// ParseStrategy accepts "strict" or "optimistic".
+func ParseStrategy(s string) (Strategy, error) {
+	switch Strategy(s) {
+	case Strict, Optimistic:
+		return Strategy(s), nil
 	}
+	return "", fmt.Errorf("unknown verify strategy %q (want strict or optimistic)", s)
 }
 
-func (c *Coordinator) Sign(message string) {
+// Fanout selects how many signers a request contacts up front (N46c).
+type Fanout string
 
-	fmt.Println("Coordinator received request")
+const (
+	// FanoutAll sends every request to all n signers at once (lowest latency
+	// when idle; every token costs up to n share computations).
+	FanoutAll Fanout = "all"
+	// FanoutHedged sends to t+1 signers first (rotating which ones), and to
+	// the rest only after HedgeDelay or as soon as any contacted signer fails
+	// (a 503 from admission control is such a fast failure).
+	FanoutHedged Fanout = "hedged"
+)
 
-	var signatures []types.PartialSignature
+// ParseFanout accepts "all" or "hedged".
+func ParseFanout(s string) (Fanout, error) {
+	switch Fanout(s) {
+	case FanoutAll, FanoutHedged:
+		return Fanout(s), nil
+	}
+	return "", fmt.Errorf("unknown fanout %q (want all or hedged)", s)
+}
 
-	for _, s := range c.Signers {
+// Endpoint is one signer. ID is its authenticated identity (signer-<ID>).
+type Endpoint struct {
+	ID     int
+	URL    string       // e.g. https://signer-3:8443
+	Client *http.Client // TLS config pinned to signer-<ID> (tlsconf.CoordinatorClient)
+}
 
-		partial := s.Sign(message)
+// Config wires a coordinator.
+type Config struct {
+	Meta      *keymeta.Meta
+	Endpoints []Endpoint
+	Deadline  time.Duration
+	Strategy  Strategy
+	Logger    *slog.Logger
+	// Fanout defaults to FanoutAll. HedgeDelay (hedged only) must be > 0.
+	Fanout     Fanout
+	HedgeDelay time.Duration
+	// Breaker bounds the extra work of misbehaving signers (optimistic only).
+	Breaker BreakerConfig
+	// QuorumAbort enables the quorum-impossible abort (NOTES N76): a request
+	// fails as soon as fewer than t signers can still answer, cancelling the
+	// outstanding signer requests so queued signers drop them before
+	// computing. Off by default: by the pre-registered rule of
+	// docs/PRIORITY_ADMISSION_V2.md §7 it raised retry-storm wait and
+	// amplification (NOTES N81). Kept as an option.
+	QuorumAbort bool
+}
 
-		signatures = append(
-			signatures,
-			partial,
-		)
+// Coordinator is safe for concurrent use.
+type Coordinator struct {
+	meta      *keymeta.Meta
+	endpoints []Endpoint
+	deadline  time.Duration
+	strategy  Strategy
+	log       *slog.Logger
+	headerSeg string
+	fanout    Fanout
+	hedge     time.Duration
+	rr        atomic.Uint64 // rotates the hedged initial subset
+	brk       *breaker
+	now       func() time.Time // time source for the breaker (tests)
+	abort     bool
 
-		valid := s.Verify(
-			message,
-			partial.Signature,
-		)
+	shareVerifications, failedCombines, suspectMarks, fallbackActivations, quorumAborts atomic.Int64
+}
 
-		fmt.Printf(
-			"Verification by %s: %v\n",
-			partial.SignerID,
-			valid,
-		)
+// Stats are cumulative counters, for tests and operators.
+type Stats struct {
+	ShareVerifications  int64 // Shoup share-proof verifications performed
+	FailedCombines      int64 // optimistic combines whose final signature did not verify
+	SuspectMarks        int64 // times a signer was newly marked suspect
+	FallbackActivations int64 // times the breaker switched to strict
+	QuorumAborts        int64 // requests failed early because t shares had become impossible (N76)
+	Suspects            []int // current suspects
+	StrictFallbackUntil time.Time
+}
 
-		if len(signatures) >= c.Threshold {
+// Stats returns the current counters.
+func (c *Coordinator) Stats() Stats {
+	ids, until := c.brk.snapshot(c.now())
+	return Stats{ShareVerifications: c.shareVerifications.Load(), FailedCombines: c.failedCombines.Load(),
+		SuspectMarks: c.suspectMarks.Load(), FallbackActivations: c.fallbackActivations.Load(),
+		QuorumAborts: c.quorumAborts.Load(), Suspects: ids, StrictFallbackUntil: until}
+}
 
-			break
+// Arrival is timing information about one Sign request, recorded before the
+// coordinator's own deadline starts (NOTES N64). It is only logged, never used
+// for any decision.
+type Arrival struct {
+	At               time.Time     // when this process's gRPC handler chain received the request
+	NginxRequestID   string        // nginx $request_id (32 hex), if present
+	NginxProxyAt     time.Time     // nginx $msec when it proxied the request (zero if absent)
+	IncomingDeadline time.Duration // time left on the caller's gRPC deadline at arrival (0: none)
+}
+
+type arrivalKey struct{}
+
+// WithArrival attaches a to ctx (grpcserver.TimingInterceptor).
+func WithArrival(ctx context.Context, a Arrival) context.Context {
+	return context.WithValue(ctx, arrivalKey{}, a)
+}
+
+// ArrivalFrom returns the Arrival attached to ctx, if any.
+func ArrivalFrom(ctx context.Context) (Arrival, bool) {
+	a, ok := ctx.Value(arrivalKey{}).(Arrival)
+	return a, ok
+}
+
+func timingAttrs(ctx context.Context, start time.Time) []any {
+	a, ok := ArrivalFrom(ctx)
+	if !ok {
+		return nil
+	}
+	out := []any{"queued_before_sign_ms", ms(start.Sub(a.At))}
+	if a.NginxRequestID != "" {
+		out = append(out, "nginx_request_id", a.NginxRequestID)
+	}
+	if !a.NginxProxyAt.IsZero() {
+		out = append(out, "nginx_to_coordinator_ms", ms(a.At.Sub(a.NginxProxyAt)))
+	}
+	if a.IncomingDeadline > 0 {
+		out = append(out, "incoming_deadline_ms", ms(a.IncomingDeadline))
+	}
+	return out
+}
+
+// New validates cfg. At least t endpoints with unique IDs in [1,n] are required.
+func New(cfg Config) (*Coordinator, error) {
+	if cfg.Meta == nil {
+		return nil, errors.New("coordinator: meta is required")
+	}
+	if cfg.Deadline <= 0 {
+		return nil, errors.New("coordinator: deadline must be > 0")
+	}
+	if _, err := ParseStrategy(string(cfg.Strategy)); err != nil {
+		return nil, fmt.Errorf("coordinator: %w", err)
+	}
+	if len(cfg.Endpoints) < cfg.Meta.Threshold {
+		return nil, fmt.Errorf("coordinator: %d signer endpoints configured, threshold is %d", len(cfg.Endpoints), cfg.Meta.Threshold)
+	}
+	seen := map[int]bool{}
+	for _, ep := range cfg.Endpoints {
+		if ep.ID < 1 || ep.ID > cfg.Meta.Parties {
+			return nil, fmt.Errorf("coordinator: signer id %d outside [1,%d]", ep.ID, cfg.Meta.Parties)
+		}
+		if seen[ep.ID] {
+			return nil, fmt.Errorf("coordinator: signer id %d configured twice", ep.ID)
+		}
+		seen[ep.ID] = true
+		if ep.URL == "" || ep.Client == nil {
+			return nil, fmt.Errorf("coordinator: signer %d needs a URL and a client", ep.ID)
+		}
+	}
+	hdr, err := jwtfmt.EncodedHeader(cfg.Meta.KID)
+	if err != nil {
+		return nil, err
+	}
+	lg := cfg.Logger
+	if lg == nil {
+		lg = slog.Default()
+	}
+	if cfg.Fanout == "" {
+		cfg.Fanout = FanoutAll
+	}
+	if _, err := ParseFanout(string(cfg.Fanout)); err != nil {
+		return nil, fmt.Errorf("coordinator: %w", err)
+	}
+	if cfg.Fanout == FanoutHedged && cfg.HedgeDelay <= 0 {
+		return nil, errors.New("coordinator: hedged fanout needs HedgeDelay > 0")
+	}
+	bc, err := cfg.Breaker.withDefaults()
+	if err != nil {
+		return nil, err
+	}
+	return &Coordinator{meta: cfg.Meta, endpoints: cfg.Endpoints, deadline: cfg.Deadline, strategy: cfg.Strategy, log: lg, headerSeg: hdr,
+		fanout: cfg.Fanout, hedge: cfg.HedgeDelay, brk: newBreaker(bc), now: time.Now, abort: cfg.QuorumAbort}, nil
+}
+
+// BreakerConfig returns the effective breaker configuration (defaults applied).
+func (c *Coordinator) BreakerConfig() BreakerConfig { return c.brk.cfg }
+
+// ErrInvalidClaims marks a Sign request whose claims are not a well-formed
+// base64url JWT payload segment.
+var ErrInvalidClaims = errors.New("invalid claims")
+
+// SignerFailure attributes one signer's failure.
+type SignerFailure struct {
+	SignerID int    `json:"signer_id"`
+	Reason   string `json:"reason"`
+}
+
+// ThresholdError is returned when fewer than t valid shares were obtained.
+// No token is ever returned alongside it.
+type ThresholdError struct {
+	Valid    int
+	Needed   int
+	Failures []SignerFailure
+}
+
+func (e *ThresholdError) Error() string {
+	var parts []string
+	for _, f := range e.Failures {
+		parts = append(parts, fmt.Sprintf("signer-%d: %s", f.SignerID, f.Reason))
+	}
+	return fmt.Sprintf("threshold not met: %d valid shares, need %d; failures: [%s]", e.Valid, e.Needed, strings.Join(parts, "; "))
+}
+
+// result is one signer's outcome.
+type result struct {
+	id       int
+	share    *tcrsa.SigShare
+	verified bool
+	skipped  bool // strict: not verified because t shares were already valid (N65)
+	err      error
+	fetch    time.Duration
+	verify   time.Duration
+}
+
+// Result is a successful signing, with per-phase latencies.
+type Result struct {
+	Header    string // base64url header, as the proto requires
+	Signature string // base64url signature, as the proto requires
+	RequestID string
+	Signers   []int // share IDs combined
+	Excluded  []SignerFailure
+	Contacted int // signers a request was actually sent to
+}
+
+func newRequestID() string {
+	var b [12]byte
+	_, _ = rand.Read(b[:])
+	return hex.EncodeToString(b[:])
+}
+
+// Sign produces base64url(header) and base64url(signature) for the proto's
+// claims (already base64url, exactly the JWT's second segment; NOTES.md N8).
+func (c *Coordinator) Sign(ctx context.Context, claims string) (*Result, error) {
+	start := time.Now()
+	if err := jwtfmt.CheckSegment(claims); err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrInvalidClaims, err)
+	}
+	input := c.headerSeg + "." + claims
+	if len(input) > jwtfmt.MaxSigningInput {
+		return nil, fmt.Errorf("%w: too large", ErrInvalidClaims)
+	}
+	digest := sha256.Sum256([]byte(input))
+	doc, err := tcrsa.PrepareDocumentHash(c.meta.PublicKey.Size(), crypto.SHA256, digest[:])
+	if err != nil {
+		return nil, err
+	}
+	reqID := newRequestID()
+	timing := timingAttrs(ctx, start)
+	ctx, cancel := context.WithTimeout(ctx, c.deadline)
+	defer cancel() // cancels outstanding signer requests once we return
+
+	// Effective strategy for this request (N65): optimistic unless the breaker
+	// has switched to strict; suspects' shares are verified before combining.
+	strategy, now := c.strategy, c.now()
+	var suspects map[int]bool
+	if strategy == Optimistic {
+		if c.brk.strictActive(now) {
+			strategy = Strict
+		} else {
+			suspects = c.brk.suspects(now)
+		}
+	}
+	var nVerify atomic.Int64
+	verifyShare := func(s *tcrsa.SigShare) error {
+		nVerify.Add(1)
+		c.shareVerifications.Add(1)
+		return s.Verify(doc, c.meta.Tcrsa)
+	}
+	strike := func(id int) {
+		if newly, until := c.brk.strike(id, c.now()); newly {
+			c.suspectMarks.Add(1)
+			c.log.Warn("signer marked suspect: its shares are verified before combining", "request_id", reqID, "signer_id", id, "until", until)
+		}
+	}
+	// Strict: verify-until-t (N65). Deferred after cancel, so it runs first and
+	// releases any share still waiting to be verified.
+	gate := newVerifyGate(c.meta.Threshold)
+	defer gate.close()
+
+	body, _ := json.Marshal(wire.SignShareRequest{SigningInput: input, RequestID: reqID})
+	results := make(chan result, len(c.endpoints))
+	launch := func(ep Endpoint) {
+		go func() {
+			r := c.fetch(ctx, ep, body, reqID)
+			if r.err == nil && strategy == Strict {
+				if gate.acquire() {
+					vs := time.Now()
+					err := verifyShare(r.share)
+					gate.release(err == nil)
+					if err != nil {
+						r.err = fmt.Errorf("invalid signature share: %v", err)
+					} else {
+						r.verified = true
+					}
+					r.verify = time.Since(vs)
+				} else {
+					r.skipped = true
+				}
+			}
+			results <- r
+		}()
+	}
+	// Fan-out (N46c). all: every signer now. hedged: t+1 now, starting at a
+	// rotating offset so load spreads; the rest after the hedge delay or on
+	// the first failure.
+	order := make([]Endpoint, len(c.endpoints))
+	off := int(c.rr.Add(1) % uint64(len(c.endpoints)))
+	for i := range c.endpoints {
+		order[i] = c.endpoints[(off+i)%len(c.endpoints)]
+	}
+	first := len(order)
+	if c.fanout == FanoutHedged && c.meta.Threshold+1 < first {
+		first = c.meta.Threshold + 1
+	}
+	launched := 0
+	var contacted []int
+	launchUpTo := func(n int) {
+		for ; launched < n; launched++ {
+			contacted = append(contacted, order[launched].ID)
+			launch(order[launched])
+		}
+	}
+	launchUpTo(first)
+	var hedgeC <-chan time.Time
+	if launched < len(order) {
+		ht := time.NewTimer(c.hedge)
+		defer ht.Stop()
+		hedgeC = ht.C
+	}
+	hedgeAll := func(why string) {
+		if launched < len(order) {
+			c.log.Debug("hedging to remaining signers", "request_id", reqID, "why", why)
+			launchUpTo(len(order))
+			hedgeC = nil
 		}
 	}
 
-	fmt.Println()
-fmt.Println("Threshold reached")
+	t := c.meta.Threshold
+	valid := map[int]*tcrsa.SigShare{}      // verified shares, deduped by ID
+	candidates := map[int]*tcrsa.SigShare{} // optimistic: well-formed, unverified
+	var failures []SignerFailure
+	fallback := strategy == Strict // optimistic switches to verifying after a failed join
+	var maxVerify time.Duration
+	var fanout, combine, finalVerify time.Duration
+	var sig []byte
+	var used []int
 
-finalSig := c.Aggregate(signatures)
-
-fmt.Println()
-fmt.Println("Aggregation complete")
-
-fmt.Printf(
-	"Participants: %v\n",
-	finalSig.Participants,
-)
-
-fmt.Printf(
-	"Signature Count: %d\n",
-	finalSig.Count,
-)
-}
-
-func (c *Coordinator) Aggregate(
-	signatures []types.PartialSignature,
-) types.FinalSignature {
-
-	var participants []string
-
-	for _, sig := range signatures {
-
-		participants = append(
-			participants,
-			sig.SignerID,
-		)
+	fail := func(id int, reason string) {
+		failures = append(failures, SignerFailure{SignerID: id, Reason: reason})
+	}
+	// verifyAll checks shares in parallel; bad ones are excluded and attributed.
+	verifyAll := func(set map[int]*tcrsa.SigShare) {
+		type vr struct {
+			id  int
+			err error
+			d   time.Duration
+		}
+		ch := make(chan vr, len(set))
+		for id, s := range set {
+			go func(id int, s *tcrsa.SigShare) {
+				vs := time.Now()
+				err := verifyShare(s)
+				ch <- vr{id, err, time.Since(vs)}
+			}(id, s)
+		}
+		for range set {
+			v := <-ch
+			maxVerify = max(maxVerify, v.d)
+			if v.err != nil {
+				fail(v.id, "invalid signature share: "+v.err.Error())
+				c.log.Warn("excluded invalid signature share", "request_id", reqID, "signer_id", v.id, "err", v.err.Error())
+				strike(v.id)
+			} else {
+				valid[v.id] = set[v.id]
+			}
+		}
+	}
+	tryJoin := func(set map[int]*tcrsa.SigShare) ([]byte, []int, error) {
+		ids := make([]int, 0, len(set))
+		for id := range set {
+			ids = append(ids, id)
+		}
+		sort.Ints(ids)
+		ids = ids[:t]
+		list := make(tcrsa.SigShareList, 0, t)
+		for _, id := range ids {
+			list = append(list, set[id])
+		}
+		js := time.Now()
+		s, err := list.Join(doc, c.meta.Tcrsa)
+		combine += time.Since(js)
+		if err != nil {
+			return nil, ids, err
+		}
+		vs := time.Now()
+		err = rsa.VerifyPKCS1v15(c.meta.PublicKey, crypto.SHA256, digest[:], s)
+		finalVerify += time.Since(vs)
+		return s, ids, err
 	}
 
-	return types.FinalSignature{
-		Participants: participants,
-		Count:        len(participants),
+	// N76 (QuorumAbort only): once fewer than t configured signers can still
+	// answer (distinct signers failed > n - t), no token is possible: stop waiting. Returning
+	// cancels the outstanding signer requests (defer cancel), and a signer that
+	// has not started RSA drops a cancelled request without computing (N46/N48).
+	impossible := func() bool {
+		if !c.abort {
+			return false
+		}
+		bad := map[int]bool{}
+		for _, f := range failures {
+			bad[f.SignerID] = true
+		}
+		return len(c.endpoints)-len(bad) < t
 	}
+	quorumImpossible := false
+	received := 0
+collect:
+	for received < launched || launched < len(order) {
+		if impossible() {
+			quorumImpossible = true
+			c.quorumAborts.Add(1)
+			break collect
+		}
+		if received == launched { // everything contacted has answered without quorum
+			hedgeAll("all contacted signers answered")
+		}
+		select {
+		case <-ctx.Done():
+			// Deadline: count every contacted signer that has not answered.
+			for _, id := range contacted {
+				if valid[id] == nil && candidates[id] == nil && !failed(failures, id) {
+					fail(id, "no response before deadline")
+				}
+			}
+			break collect
+		case <-hedgeC:
+			hedgeAll("hedge delay elapsed")
+		case r := <-results:
+			received++
+			maxVerify = max(maxVerify, r.verify)
+			if r.err != nil {
+				fail(r.id, r.err.Error())
+				hedgeAll("signer failed: " + r.err.Error())
+				if r.share != nil { // a returned-but-invalid share (strict)
+					c.log.Warn("excluded invalid signature share", "request_id", reqID, "signer_id", r.id, "err", r.err.Error())
+					strike(r.id)
+				}
+				continue
+			}
+			if r.skipped { // strict: t shares already verified; this one is not needed
+				continue
+			}
+			// Defence in depth, unreachable today (audit C-3, mutation M3a): r.id is
+			// the endpoint id, New rejects duplicate endpoint ids
+			// (TestNewRejectsBadEndpoints), and each endpoint is launched once, so
+			// no second result can carry the same id. Kept so that tcrsa Join, which
+			// accepts duplicate ids and returns an invalid signature (NOTES N5),
+			// can never see one, even if those guarantees change.
+			if valid[r.id] != nil || candidates[r.id] != nil {
+				fail(r.id, "duplicate share id")
+				continue
+			}
+			switch {
+			case r.verified:
+				valid[r.id] = r.share
+			case fallback, suspects[r.id]:
+				// fallback: verifying everything after a failed combine;
+				// suspect: verified before it may be combined (N65).
+				verifyAll(map[int]*tcrsa.SigShare{r.id: r.share})
+			default:
+				candidates[r.id] = r.share
+			}
+
+			if !fallback && len(candidates) > 0 && len(candidates)+len(valid) >= t {
+				fanout = time.Since(start)
+				set := make(map[int]*tcrsa.SigShare, len(candidates)+len(valid))
+				for id, sh := range valid {
+					set[id] = sh
+				}
+				for id, sh := range candidates {
+					set[id] = sh
+				}
+				s, ids, err := tryJoin(set)
+				if err == nil {
+					sig, used = s, ids
+					break collect
+				}
+				c.failedCombines.Add(1)
+				c.log.Warn("optimistic combine failed final verification; verifying shares individually", "request_id", reqID, "err", err.Error())
+				if activated, until := c.brk.failedCombine(c.now()); activated {
+					c.fallbackActivations.Add(1)
+					c.log.Warn("breaker: repeated failed optimistic combines; strict verification until cooldown ends", "request_id", reqID, "until", until)
+				}
+				hedgeAll("optimistic combine failed")
+				fallback = true
+				verifyAll(candidates)
+				candidates = map[int]*tcrsa.SigShare{}
+			}
+			if len(valid) >= t {
+				fanout = time.Since(start)
+				s, ids, err := tryJoin(valid)
+				if err != nil {
+					// All joined shares individually verified; a bad combined
+					// signature means the key metadata or library is broken.
+					c.log.Error("combined signature failed final verification", "request_id", reqID, "combined", ids, "err", err.Error())
+					return nil, fmt.Errorf("combined signature from verified shares %v failed verification: %w", ids, err)
+				}
+				sig, used = s, ids
+				break collect
+			}
+		}
+	}
+	cancel()
+
+	if sig == nil {
+		terr := &ThresholdError{Valid: len(valid), Needed: t, Failures: failures}
+		c.log.Error("sign failed", append([]any{"request_id", reqID, "strategy", c.strategy, "strategy_effective", strategy, "fanout", c.fanout, "signers_contacted", len(contacted),
+			"valid_shares", len(valid), "failures", failures, "share_verifications", nVerify.Load(), "quorum_impossible", quorumImpossible,
+			"latency_ms", ms(time.Since(start))}, timing...)...)
+		return nil, terr
+	}
+	// Fail closed: the returned signature has passed rsa.VerifyPKCS1v15 in tryJoin.
+	c.log.Info("signed", append([]any{"request_id", reqID, "strategy", c.strategy, "strategy_effective", strategy, "fanout", c.fanout, "signers_contacted", len(contacted),
+		"valid_shares", len(valid) + len(candidates), "combined", used, "excluded", failures, "share_verifications", nVerify.Load(),
+		"latency_ms", ms(time.Since(start)), "fanout_ms", ms(fanout), "max_share_verify_ms", ms(maxVerify),
+		"combine_ms", ms(combine), "final_verify_ms", ms(finalVerify)}, timing...)...)
+	return &Result{
+		Header:    c.headerSeg,
+		Signature: base64.RawURLEncoding.EncodeToString(sig),
+		RequestID: reqID,
+		Signers:   used,
+		Excluded:  failures,
+		Contacted: len(contacted),
+	}, nil
 }
+
+func failed(fs []SignerFailure, id int) bool {
+	for _, f := range fs {
+		if f.SignerID == id {
+			return true
+		}
+	}
+	return false
+}
+
+func ms(d time.Duration) float64 { return float64(d.Microseconds()) / 1000 }
+
+// fetch asks one signer for its share and checks it is well-formed. The share
+// ID is the endpoint's authenticated identity, never the response's claim.
+func (c *Coordinator) fetch(ctx context.Context, ep Endpoint, body []byte, reqID string) result {
+	st := time.Now()
+	r := result{id: ep.ID}
+	defer func() { r.fetch = time.Since(st) }()
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimRight(ep.URL, "/")+wire.SignSharePath, bytes.NewReader(body))
+	if err != nil {
+		r.err = err
+		return r
+	}
+	req.Header.Set("Content-Type", "application/json")
+	// N48: tell the signer how long we will still wait, so it can queue for
+	// a computation slot only when the share can still arrive in time.
+	if d, ok := ctx.Deadline(); ok {
+		ms := time.Until(d).Milliseconds()
+		if ms < 1 {
+			ms = 1
+		}
+		req.Header.Set(wire.DeadlineHeader, strconv.FormatInt(ms, 10))
+	}
+	resp, err := ep.Client.Do(req)
+	if err != nil {
+		r.err = fmt.Errorf("request failed: %v", unwrapURL(err))
+		return r
+	}
+	defer resp.Body.Close()
+	// R-b: the share's ID is bound to the mTLS identity of the responder.
+	if resp.TLS == nil || len(resp.TLS.PeerCertificates) == 0 {
+		r.err = errors.New("response not received over mTLS")
+		return r
+	}
+	if leaf := resp.TLS.PeerCertificates[0]; len(leaf.DNSNames) != 1 || leaf.DNSNames[0] != fmt.Sprintf("signer-%d", ep.ID) {
+		r.err = fmt.Errorf("peer certificate %v is not signer-%d", leaf.DNSNames, ep.ID)
+		return r
+	}
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, wire.MaxResponseBytes+1))
+	if err != nil {
+		r.err = fmt.Errorf("read response: %v", err)
+		return r
+	}
+	if len(raw) > wire.MaxResponseBytes {
+		r.err = errors.New("response too large")
+		return r
+	}
+	if resp.StatusCode != http.StatusOK {
+		var er wire.ErrorResponse
+		if json.Unmarshal(raw, &er) == nil && er.Error != "" {
+			r.err = fmt.Errorf("refused (HTTP %d %s): %s", resp.StatusCode, er.Error, er.Reason)
+		} else {
+			r.err = fmt.Errorf("HTTP %d", resp.StatusCode)
+		}
+		return r
+	}
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	dec.DisallowUnknownFields()
+	var sr wire.SignShareResponse
+	if err := dec.Decode(&sr); err != nil {
+		r.err = fmt.Errorf("malformed response: %v", err)
+		return r
+	}
+	if sr.SignerID != ep.ID {
+		r.err = fmt.Errorf("response claims signer_id %d but came from authenticated signer-%d", sr.SignerID, ep.ID)
+		return r
+	}
+	if sr.RequestID != reqID {
+		r.err = fmt.Errorf("response request_id %q does not match %q", sr.RequestID, reqID)
+		return r
+	}
+	share, err := sr.Share.ToTcrsa(ep.ID, c.meta.Parties, c.meta.PublicKey.N)
+	if err != nil {
+		r.err = fmt.Errorf("malformed share: %v", err)
+		// keep r.share nil: nothing usable
+		return r
+	}
+	r.share = share
+	return r
+}
+
+func unwrapURL(err error) error {
+	var ue interface{ Unwrap() error }
+	if errors.As(err, &ue) {
+		if inner := ue.Unwrap(); inner != nil {
+			return inner
+		}
+	}
+	return err
+}
+
+// Meta returns the public key metadata.
+func (c *Coordinator) Meta() *keymeta.Meta { return c.meta }
+
+// Strategy returns the configured verification strategy.
+func (c *Coordinator) Strategy() Strategy { return c.strategy }
+
+// FanoutMode returns the configured fan-out mode.
+func (c *Coordinator) FanoutMode() Fanout { return c.fanout }

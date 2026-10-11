@@ -1,794 +1,202 @@
 # frost-k8s-threshold-signing
 
-**First working implementation of FROST threshold signing integrated with the Kubernetes ExternalJWTSigner API (KEP-740, stable v1.36)**
+**Threshold-signed Kubernetes service account tokens.** kube-apiserver (v1.36+) delegates
+service account token signing to an external signer over its ExternalJWTSigner gRPC API
+(KEP-740). This repository implements that signer with **Shoup threshold RSA (3-of-5)**:
+the RS256 signature on every token is combined from signature shares that at least 3 of 5
+signers produce, each holding one share and applying its own claims policy, and **no process
+ever holds the whole private key after key generation**. The threshold protects only as far
+as the signers fail independently, which is a property of the deployment, not of the code:
+no tested deployment gives independent operators, accounts or software
+([Trust assumptions](#trust-assumptions)). kube-apiserver verifies the result as an ordinary RS256 JWT against the group
+public key; nothing in Kubernetes is modified.
 
-[![Go](https://img.shields.io/badge/Go-1.23+-blue)](https://go.dev) [![License](https://img.shields.io/badge/License-Apache%202.0-green)](LICENSE) [![Kubernetes](https://img.shields.io/badge/Kubernetes-v1.36+-blue)](https://kubernetes.io) [![. 2026](https://img.shields.io/badge/.-2026-orange)](https://..dev) [![Zenodo](https://img.shields.io/badge/DOI-10.5281%2Fzenodo.20770308-blue)](https://doi.org/10.5281/zenodo.20770308)
+> **Status: open-source research prototype (Apache-2.0).** It has been tested end to end against
+> a real kube-apiserver v1.36.5: single host (`make e2e`), multi-VM on one physical host
+> (Level 1), and one signer per AWS region (Level 2: **5 regions, one provider, one account,
+> one operator, one build, one dealer**; [reports/INDEPENDENCE.md](reports/INDEPENDENCE.md)).
+> Final benchmark numbers come from Phase 7C (kubeadm v1.36.5 on AWS); Phase 7A is single-host
+> and CPU-contended, Phase 7B is T only with one run per configuration, and the Level 1
+> numbers are preliminary (arm64). The threshold RSA library (`niclabs/tcrsa` v0.0.5) is
+> **unaudited**. Read
+> [Trust assumptions](#trust-assumptions) and [docs/THREAT_MODEL.md](docs/THREAT_MODEL.md)
+> before relying on anything here.
 
-| # | Title | Venue | Status |
-|---|---|---|---|
-| 📖 Paper 1 | [Authentication Mechanisms in Kubernetes: A Systematic Review](https://doi.org/10.5281/zenodo.20734453) | Zenodo | Preprint |
-| 🔒 Paper 2 | [Threat Modeling and Security Analysis of Threshold-Based Token Signing](https://doi.org/10.5281/zenodo.20733863) | Zenodo | Preprint |
-| 🚀 Paper 3 | [frost-k8s: A FROST-Based Threshold Signing Proxy *(this repo)*](https://doi.org/10.5281/zenodo.20770308) | Zenodo  |
+The repository name comes from an earlier prototype that used FROST. That design could not
+work: Kubernetes verifies only RS256/ES256/ES384/ES512, FROST produces Schnorr signatures,
+and the prototype in fact signed every token with a single coordinator-held ECDSA key. It is
+kept, excluded from every build, in [legacy/frost/](legacy/frost/README.md), with its
+original README. Its keys were committed to this public repository and are **burned**.
 
----
+**About the git history:** the early history contains those burned development keys and secrets
+of the abandoned FROST prototype; per the owner they were never used outside this repository, and nothing in
+the rebuilt system uses them. The author's employer name appears in the history of one
+audit-instructions commit (0aac79c) and nowhere in the current tree. The history is deliberately
+**not** rewritten, because rewriting would change every commit hash the evidence cites, including
+the pre-registration proof for the v2 evaluation. See [reports/HISTORY_PURGE.md](reports/HISTORY_PURGE.md),
+which also records the plan for an anonymized, history-free snapshot for double-blind review.
 
-## What Is This?
-
-Kubernetes signs every service account JWT token using a single private key stored on the control plane filesystem. If that key is ever stolen — by an attacker, a malicious insider, or a misconfigured backup — the attacker can forge tokens for any service account with any permission level. Token rotation doesn't help. RBAC doesn't help. Short-lived tokens don't help. The attacker just mints new valid tokens continuously, forever.
-
-This project replaces that single key with **FROST threshold signing** — a cryptographic protocol where **3 out of 5 independent signers must collaborate** to produce any valid token. No single compromise grants forging capability.
-
-```
-Default Kubernetes:
-  kube-apiserver → single private key → sign JWT
-  (1 key stolen = full cluster access, forever, undetectable)
-
-This project:
-  kube-apiserver → gRPC proxy → 3-of-5 FROST signers → sign JWT
-  (need 3 independent compromises to forge any token)
-```
-
-The output is a **standard JWT** — kubectl, client-go, and all existing tools work without any changes.
-
----
-
-## 📊 Benchmark Summary
-
-| Metric | Baseline RS256 | FROST 3-of-5 |
-|---|---|---|
-| Warm latency (P50) | 34ms | 34ms (**0% overhead**) |
-| Warm latency (avg) | 34ms | 36ms (+6%) |
-| Sequential throughput | 31 tok/s | 31 tok/s |
-| 50 concurrent overhead | — | +18% |
-| Failure tolerance | None | **2-of-5 signers** |
-| Signer recovery | N/A | 84ms |
-| Coordinator HA | None | **3 instances, auto-failover** |
-
-> Benchmarks on single-node Minikube, macOS Apple Silicon. See [Section 10](#10-benchmark-results) for full results.
-
----
-
-## Table of Contents
-
-1. [Prerequisites](#1-prerequisites)
-2. [The Problem](#2-the-problem--in-detail)
-3. [The Solution — How FROST Works](#3-the-solution--how-frost-works)
-4. [Architecture](#4-architecture)
-5. [Quick Start — macOS](#5-quick-start--macos)
-6. [Quick Start — Linux](#6-quick-start--linux)
-7. [First-Time Setup (Keys, Certs, Vault)](#7-first-time-setup-keys-certs-vault)
-8. [Verification](#8-verification--check-everything-works)
-9. [Running the DKG Ceremony](#9-running-the-dkg-ceremony)
-10. [Benchmark Results](#10-benchmark-results)
-11. [Failure Tolerance Testing](#11-failure-tolerance-testing)
-12. [What Was Built](#12-what-was-built)
-13. [Repository Structure](#13-repository-structure)
-14. [Known Limitations](#14-known-limitations)
-15. [Future Work](#15-future-work)
-16. [Troubleshooting](#16-troubleshooting)
-
----
-
-## 1. Prerequisites
-
-Install these before anything else:
-
-| Tool | Version | Install |
-|---|---|---|
-| Go | 1.23+ | https://go.dev/dl/ |
-| Docker Desktop | Latest | https://www.docker.com/products/docker-desktop/ |
-| minikube | Latest | `brew install minikube` |
-| kubectl | Latest | `brew install kubectl` |
-| openssl | Any | Pre-installed on macOS/Linux |
-
-**System requirements:** 8GB+ RAM, 10GB free disk space, macOS or Linux.
-
-Verify:
-```bash
-go version        # 1.23+
-docker --version
-minikube version
-kubectl version --client
-```
-
----
-
-## 2. The Problem — In Detail
-
-### How Kubernetes Signs Tokens Today
-
-When a pod starts, Kubernetes issues it a service account JWT token signed by `kube-controller-manager` using a private key — by default `/etc/kubernetes/pki/sa.key`.
+## How it works
 
 ```
-Pod starts → kubelet requests token → kube-apiserver signs with sa.key
-→ Token mounted at /var/run/secrets/kubernetes.io/serviceaccount/token
-→ Pod uses token to authenticate to Kubernetes API
+kube-apiserver ──unix socket (dir 0700)──▶ nginx ──mTLS "lb"──▶ coordinator ×3 ──mTLS "coordinator-<k>"──▶ signer ×5
+  (FetchKeys: group public key; Sign: header + claims)            (public metadata only)          (one share each,
+                                                                                                    own claims policy)
 ```
 
-### Why This Is a Problem
+1. **Key ceremony (trusted dealer).** `cmd/dealer` generates a 2048-bit Shoup 3-of-5 RSA key
+   and writes `public-meta.json` (group public key, share verification keys, `kid`) and one
+   `share-<i>.json` per signer. The full private key exists only in the dealer's memory
+   during generation ([docs/KEY_CEREMONY.md](docs/KEY_CEREMONY.md)).
+2. **Signers** (`cmd/signer`) each hold **exactly one** share. For a request they re-check the
+   JWT header byte-for-byte, hash and PKCS#1 v1.5-encode the signing input **themselves**,
+   apply an **independent claims policy** (issuer, audience allowlist, maximum lifetime, clock
+   skew, subject form, deny lists, rate limit), write an audit record, and only then return a
+   signature share. They admit work only if it can finish before the coordinator's deadline.
+3. **Coordinators** (`cmd/grpc-proxy`) implement ExternalJWTSigner v1. They hold **only public
+   metadata**. They fan the signing input out to the signers, combine 3 shares into a
+   standard RS256 signature and verify it against the group key before returning it. By
+   default (`optimistic`) shares are verified individually (Shoup proof) only after a failed
+   combine, for signers already marked suspect, or in `strict` mode; the final-signature check
+   always runs (NOTES N65). Fewer than 3 valid shares → a generic error, never a token.
+4. **kube-apiserver** verifies tokens with the key from `FetchKeys` (also served at
+   `/openid/v1/jwks`). Verification needs no signer.
 
-The `sa.key` file is stored in plaintext on the control plane, accessible to anyone with root, never rotated without restarting the apiserver, and **impossible to detect theft** — reading a file generates no audit logs.
+## Trust assumptions
 
-If an attacker steals `sa.key`, they can forge tokens for any identity, with any permission, indefinitely.
+State these whenever you describe the system:
 
-### What Existing Mitigations Cannot Do
+- **Trusted dealer.** Shoup threshold RSA needs one. The dealer sees the whole key during
+  the ceremony; a dishonest or compromised dealer can forge forever.
+- **Signer independence is required for the security claim.** Threshold signing protects
+  against compromise of fewer than 3 signers only if signers fail independently (different
+  hosts, operators, credentials). The single-host deployment has **none**; the Level 1
+  multi-host deployment is **multi-VM on one physical host**; Level 2 puts one signer in each
+  of 5 AWS regions but keeps **one provider, one account, one operator, one build and one
+  dealer**: whoever controls that account or operator controls every signer
+  ([reports/INDEPENDENCE.md](reports/INDEPENDENCE.md)).
+- **The signer claims policy limits *what* can be signed, not *who* asks.** Whoever controls
+  a coordinator (or kube-apiserver) can obtain tokens for any **policy-compliant** claims
+  while in control (an online oracle). What they cannot do is obtain policy-violating tokens,
+  or mint tokens after losing control (no share or key is on the coordinator).
+  **Under the shipped policy (`deploy/policy.json`, empty deny lists) "policy-compliant"
+  includes tokens for kube-system service accounts**, some of which can escalate to cluster-admin (e.g.
+  `kube-system:clusterrole-aggregation-controller`, which may escalate ClusterRoles). A live coordinator compromise is
+  therefore, while it lasts, effectively a cluster compromise. What bounds it: the issuer,
+  audience allowlist and maximum lifetime (7200 s), the ±60 s `iat` window, the per-signer rate
+  limit, every signer's audit log, and the end of control (THREAT_MODEL §4). kube-system
+  cannot simply be denied, because kube-controller-manager's own controllers use those
+  tokens.
+- **3 colluding or co-compromised signers can forge.** That is the threshold.
+- **Unaudited cryptography.** `niclabs/tcrsa` v0.0.5 (2020) is unaudited and unmaintained;
+  the coordinator guards its known hazards (docs/THREAT_MODEL.md §5).
+- **Signers need correct clocks.** A signer whose clock is off by more than the policy's skew
+  refuses every token (fail closed).
 
-| Mitigation | What It Protects | Why It Fails Against Key Theft |
-|---|---|---|
-| Bound tokens (v1.22+) | Stolen pod tokens | Attacker forges new bound tokens with stolen key |
-| Token rotation | Stale tokens | Same key signs new tokens |
-| RBAC hardening | Overprivilege | Attacker forges any identity |
-| Network policies | Lateral movement | Token auth happens at L7 via apiserver |
-| SPIFFE/SPIRE | Workload identity | Single SPIRE root CA = same problem |
-| External JWT Signer | Key extraction from disk | Still a single signing authority |
+## Quick start
 
-**None of these protect the signing key itself.**
-
----
-
-## 3. The Solution — How FROST Works
-
-### Threshold Cryptography
-
-A (t, n) threshold signature scheme distributes signing capability among n parties such that any t can collaborate to produce a valid signature, but fewer than t cannot.
-
-**For this project: t=3, n=5** — any 3 of 5 signers can sign, but 2 or fewer cannot.
-
-### FROST (RFC 9591)
-
-FROST is an IETF-standardized threshold Schnorr signature scheme with two key properties:
-
-1. **Distributed Key Generation (DKG):** The signing key is generated collaboratively — it never exists at any single location.
-2. **Standard verification:** The output is a standard Schnorr/ECDSA signature. Kubernetes doesn't need to know threshold signing happened.
-
-### The Signing Flow
-
-```
-Pod requests token
-      ↓
-kube-apiserver calls gRPC proxy (ExternalJWTSigner — KEP-740)
-      ↓
-Proxy contacts 5 signers IN PARALLEL → accepts first 3 responses
-      ↓
-3 partial signatures aggregated → 1 valid Schnorr signature
-      ↓
-Standard JWT returned to pod
-```
-
----
-
-## 4. Architecture
-
-```
-┌─────────────────────────────────────────────────────┐
-│                  Kubernetes Cluster                  │
-│                                                      │
-│  ┌──────────────────────────────────────────────┐   │
-│  │            kube-apiserver                     │   │
-│  │  --service-account-signing-endpoint=          │   │
-│  │  unix:///var/run/frost-k8s/signer.sock        │   │
-│  └─────────────────┬────────────────────────────┘   │
-│                    │ gRPC (KEP-740)                   │
-│                    ▼                                  │
-│  ┌─────────────────────────────────────────────┐    │
-│  │         nginx Load Balancer (HA)             │    │
-│  └──────┬──────────────┬──────────────┬────────┘    │
-│         ▼              ▼              ▼              │
-│  ┌────────────┐ ┌────────────┐ ┌────────────┐       │
-│  │  Proxy-1   │ │  Proxy-2   │ │  Proxy-3   │       │
-│  │ (no key    │ │ (no key    │ │ (no key    │       │
-│  │ material)  │ │ material)  │ │ material)  │       │
-│  └─────┬──────┘ └─────┬──────┘ └─────┬──────┘       │
-│        └──────────────┴──────────────┘               │
-│                       │ mTLS HTTPS (parallel)         │
-└───────────────────────┼─────────────────────────────┘
-                        │
-        ┌───────┬───────┼───────┬───────┐
-        ▼       ▼       ▼       ▼       ▼
-      ┌───┐   ┌───┐   ┌───┐   ┌───┐   ┌───┐
-      │ S1│   │ S2│   │ S3│   │ S4│   │ S5│
-      │key│   │key│   │key│   │key│   │key│
-      │sh1│   │sh2│   │sh3│   │sh4│   │sh5│
-      └───┘   └───┘   └───┘   └───┘   └───┘
-                        │
-                ┌───────┴────────┐
-                │ HashiCorp Vault │
-                │ (key storage)  │
-                └────────────────┘
-```
-
-**Key properties:**
-- Zero Kubernetes core changes
-- Standard JWT output — all existing clients work
-- Tolerates 2 signer failures (3-of-5)
-- 3 coordinator proxies behind nginx — no single proxy failure halts signing
-- mTLS between coordinator and all signers
-
----
-
-## 5. Quick Start — macOS
-
-> **macOS users:** Docker Desktop prevents direct Unix socket sharing between containers and Minikube. This is handled automatically by `restart-frost.sh` using a socat bridge. **You do not need to set this up manually.**
-
-**If you have already completed [Section 7](#7-first-time-setup-keys-certs-vault) (keys, certs, Vault):**
+Requirements: **Linux host with Docker Engine** (not Docker Desktop), `kind` v0.31.0,
+`kubectl` v1.36.x, Go 1.27.1, `jq`, `openssl`, `gitleaks`. See [NOTES.md](NOTES.md) for
+the exact pinned versions and the locally built `kindest/node:v1.36.5-tk8s` image
+(`kind build node-image --type release v1.36.5`).
 
 ```bash
-# Start Minikube
-minikube start --driver=docker
-
-# One command — starts containers, detects IPs, sets up socat bridge, patches apiserver
-bash scripts/restart-frost.sh
-
-# Verify — should show kid:frost-k8s-v1
-kubectl create token default | cut -d. -f1 | base64 -d
+make test          # unit + integration tests (T1–T12) and the malicious-signer test (T5)
+make check-images  # T13: no share, key or cert in any image layer
+make e2e           # kind v1.36.5 cluster signing only via the threshold signer: E1–E8, N1–N3, REQ-a–d
+make e2e-keep      # same, leave the cluster up; make e2e-down to remove it and its secrets
 ```
 
-**First time? Go to [Section 7](#7-first-time-setup-keys-certs-vault) first.**
+`make e2e` generates fresh certificates and a fresh key, starts 5 signers, 3 coordinators and
+nginx (`deploy/docker-compose.yml`), creates a kind cluster whose apiserver has **no**
+in-tree service account key, runs every check, and deletes all generated key material on
+exit. Each run writes `test/e2e/results/<UTC>-<sha>/e2e.log`.
 
----
+Multi-host (signers on separate hosts, native binaries under hardened systemd units,
+per-host firewalls): [deploy/multihost/README.md](deploy/multihost/README.md), driven by
+`test/e2e/multihost.sh` from the operator machine.
 
-## 6. Quick Start — Linux
+## Tests and evidence
 
-> **Linux users:** No socat bridge needed. Direct volume mount works.
-
-**If you have already completed [Section 7](#7-first-time-setup-keys-certs-vault):**
-
-```bash
-# Start Minikube
-minikube start --driver=docker
-
-# Start ALL 9 containers (signers, proxies, nginx, Vault)
-cd deploy && docker compose up -d && cd ..
-
-# Mount socket directly into Minikube (no socat needed on Linux)
-mkdir -p /tmp/frost-k8s
-minikube mount /tmp/frost-k8s:/var/run/frost-k8s &
-
-# Patch apiserver and configure proxy socket path
-# restart-frost.sh works on Linux too — or run setup-minikube.sh directly
-bash scripts/restart-frost.sh
-# Note: restart-frost.sh also works on Linux and handles proxy socket configuration
-
-# Verify
-kubectl create token default | cut -d. -f1 | base64 -d
-```
-
-**First time? Go to [Section 7](#7-first-time-setup-keys-certs-vault) first.**
-
----
-
-## 7. First-Time Setup (Keys, Certs, Vault)
-
-Run this once. After first-time setup, use Quick Start ([macOS](#5-quick-start--macos) / [Linux](#6-quick-start--linux)) for subsequent runs.
-
-### Step 1: Clone and Install Dependencies
-
-```bash
-git clone https://github.com/raahulkurmi/frost-k8s-threshold-signing.git
-cd frost-k8s-threshold-signing
-go mod tidy
-```
-
-### Step 2: Generate FROST Key Shares
-
-```bash
-go run cmd/keygen/main.go
-# Creates data/frost-keys.json — 3-of-5 threshold key shares
-# Any 3 can sign; 2 or fewer cannot produce any valid signature
-```
-
-### Step 3: Generate ECDSA Signing Key
-
-```bash
-go run cmd/genkey/main.go
-# Creates data/ecdsa-signing.pem — ECDSA P-256 key for JWT signing
-```
-
-### Step 4: Encrypt Key Shares
-
-```bash
-go run cmd/encrypt-keys/main.go
-# Creates data/frost-keys.enc — AES-256-GCM encrypted key shares
-# Set FROST_KEY_PASSWORD env var for production (default: "frost-dev-password")
-```
-
-### Step 5: Generate mTLS Certificates
-
-We need 3 certificates:
-- **CA** — Certificate Authority that signs both proxy and signer certs
-- **Proxy cert** — Identity for the gRPC coordinator
-- **Signer cert** — Identity for all 5 signer containers (shared cert with SANs for each hostname)
-
-```bash
-mkdir -p certs
-
-# 1. Certificate Authority
-openssl genrsa -out certs/ca.key 2048
-openssl req -new -x509 -days 365 -key certs/ca.key \
-  -out certs/ca.crt -subj "/CN=frost-k8s-ca"
-
-# 2. Proxy certificate
-openssl genrsa -out certs/proxy.key 2048
-openssl req -new -key certs/proxy.key \
-  -out certs/proxy.csr -subj "/CN=frost-proxy"
-openssl x509 -req -days 365 \
-  -in certs/proxy.csr \
-  -CA certs/ca.crt -CAkey certs/ca.key -CAcreateserial \
-  -out certs/proxy.crt
-
-# 3. Signer certificate (SANs allow one cert to work for all 5 signer hostnames)
-cat > certs/signer-ext.cnf << 'EOF'
-[req]
-req_extensions = v3_req
-distinguished_name = req_distinguished_name
-[req_distinguished_name]
-[v3_req]
-subjectAltName = @alt_names
-[alt_names]
-DNS.1 = signer-1
-DNS.2 = signer-2
-DNS.3 = signer-3
-DNS.4 = signer-4
-DNS.5 = signer-5
-DNS.6 = localhost
-EOF
-
-openssl genrsa -out certs/signer.key 2048
-openssl req -new -key certs/signer.key \
-  -out certs/signer.csr -subj "/CN=frost-signer"
-openssl x509 -req -days 365 \
-  -in certs/signer.csr \
-  -CA certs/ca.crt -CAkey certs/ca.key -CAcreateserial \
-  -out certs/signer.crt \
-  -extensions v3_req -extfile certs/signer-ext.cnf
-
-# Verify
-ls certs/
-# Expected: ca.crt ca.key proxy.crt proxy.key signer.crt signer.key signer-ext.cnf
-```
-
-### Step 6: Start Vault and Load Key Shares
-
-```bash
-cd deploy && docker compose up -d vault && sleep 5 && cd ..
-bash scripts/vault-init.sh
-# Each signer fetches only its own share from Vault at startup
-```
-
-### Step 7: Build and Start All Containers
-
-```bash
-cd deploy
-docker compose build
-docker compose up -d
-```
-
-This starts **9 containers**:
-
-| Container | Role | Port |
-|---|---|---|
-| deploy-vault-1 | Key share storage | 8200 |
-| deploy-signer-1-1 through 5-1 | FROST Signers 1–5 | 8081–8085 (mTLS) |
-| deploy-grpc-proxy-1-1 through 3-1 | Coordinator instances | internal |
-| deploy-coordinator-lb-1 | nginx load balancer | 9090 |
-
-### Step 8: Start Minikube and Configure FROST
-
----
-
-**🍎 macOS users — run this:**
-```bash
-cd .. && minikube start --driver=docker
-bash scripts/restart-frost.sh
-# socat bridge is set up automatically
-```
-
----
-
-**🐧 Linux users — run this:**
-```bash
-cd .. && minikube start --driver=docker
-
-# Start ALL containers
-cd deploy && docker compose up -d && cd ..
-
-# Mount socket directly (no socat needed)
-mkdir -p /tmp/frost-k8s
-minikube mount /tmp/frost-k8s:/var/run/frost-k8s &
-
-# Patch apiserver
-bash scripts/setup-minikube.sh
-# Note: restart-frost.sh also works on Linux and handles proxy socket configuration
-```
-
----
-
-### Step 9: Verify
-
-```bash
-kubectl create token default | cut -d. -f1 | base64 -d
-# Expected: {"alg":"ES256","typ":"JWT","kid":"frost-k8s-v1"}
-```
-
----
-
-## 8. Verification — Check Everything Works
-
-### Verify FROST Token Header
-
-```bash
-kubectl create token default | cut -d. -f1 | base64 -d
-# Expected: {"alg":"ES256","typ":"JWT","kid":"frost-k8s-v1"}
-```
-
-- `alg: ES256` — ECDSA P-256 ✅
-- `kid: frost-k8s-v1` — FROST proxy signed this ✅
-
-### Verify Proxy Logs Show Signing
-
-```bash
-cd deploy && docker compose logs grpc-proxy-1 | grep "Signed JWT" | tail -3
-# Expected: [proxy] Signed JWT — kid=frost-k8s-v1 active_signers=[signer-3 signer-1 signer-4]
-```
-
-### Verify Coordinator HA
-
-```bash
-# Kill one proxy — signing should continue via the other two
-docker stop deploy-grpc-proxy-1-1
-kubectl create token default | cut -d. -f1 | base64 -d
-# Expected: frost-k8s-v1 — still works!
-docker start deploy-grpc-proxy-1-1
-```
-
-### Deploy a Real Application
-
-```bash
-kubectl create namespace test
-kubectl create deployment nginx --image=nginx -n test
-sleep 30 && kubectl get pods -n test
-# Expected: nginx pod Running
-
-# Inspect its mounted token
-POD=$(kubectl get pod -n test -o name | head -1)
-kubectl exec -n test $POD -- \
-  cat /var/run/secrets/kubernetes.io/serviceaccount/token | \
-  cut -d. -f1 | base64 -d
-# Expected: {"alg":"ES256","typ":"JWT","kid":"frost-k8s-v1"}
-```
-
----
-
-## 9. Running the DKG Ceremony
-
-The DKG ceremony allows signers to generate key shares without any trusted dealer — no single party ever sees the complete key.
-
-```
-Round 1: Each signer generates a random polynomial → broadcasts commitments
-Broadcast: Coordinator distributes all commitments to all signers
-Round 2: Each signer computes shares for every other signer
-Finalize: Each signer sums received shares → final key share
-```
-
-```bash
-docker exec deploy-grpc-proxy-1-1 sh -c "
-SIGNER_1_ADDR=https://signer-1:8081 \
-SIGNER_2_ADDR=https://signer-2:8082 \
-SIGNER_3_ADDR=https://signer-3:8083 \
-SIGNER_4_ADDR=https://signer-4:8084 \
-SIGNER_5_ADDR=https://signer-5:8085 \
-/bin/dkg-coordinator"
-```
-
----
-
-## 10. Benchmark Results
-
-All benchmarks: single-node Minikube, Docker driver, macOS M-series (ARM64 native binary).
-
-### Latency Comparison
-
-| Test | Baseline RS256 | FROST 3-of-5 | Overhead |
-|---|---|---|---|
-| Single token (cold) | ~57ms | ~69ms | +12ms (one-time) |
-| Single token (warm) | ~34ms | ~36ms | +6% |
-| Warm P50 | 34ms | 34ms | **0%** |
-| Warm P95 | 48ms | 69ms | +44% |
-| 100 tokens avg | 32ms | 31ms | ~0% |
-| 500 tokens avg | 31ms | 44ms | +42% |
-| 10 concurrent | ~174ms | ~81ms | -53%† |
-| 20 concurrent | ~143ms | ~152ms | +6% |
-| 50 concurrent | ~340ms | ~403ms | +18% |
-| Sequential throughput | 31 tok/s | 31 tok/s | 0% |
-
-†Attributable to nginx load balancing across 3 coordinator instances — not a cryptographic advantage.
-
-> **Note:** Results include macOS Docker Desktop networking overhead and socat bridge latency. Production Linux bare-metal deployments will show different absolute numbers.
-
-### Failure and Recovery
-
-| Scenario | Result | Time |
-|---|---|---|
-| 2 of 5 signers killed | Signing continues ✅ | ~70ms (same) |
-| 3 of 5 signers killed | Explicit error ✅ | N/A |
-| Signer restarted | Automatic recovery ✅ | 84ms |
-| Coordinator proxy killed | nginx failover ✅ | Transparent |
-
-### Signer Count Effect
-
-| Signers Active | Latency | Notes |
-|---|---|---|
-| 5-of-5 | ~36ms | Normal operation |
-| 3-of-5 (2 killed) | ~36ms | **Zero overhead** |
-| 2-of-5 (3 killed) | Error | Explicit threshold enforcement |
-
----
-
-## 11. Failure Tolerance Testing
-
-### Test 1: Kill 2 Signers (System Continues)
-
-```bash
-docker stop deploy-signer-4-1 deploy-signer-5-1
-sleep 3
-kubectl create token default | cut -d. -f1 | base64 -d
-# Expected: {"alg":"ES256","typ":"JWT","kid":"frost-k8s-v1"}
-docker start deploy-signer-4-1 deploy-signer-5-1
-```
-
-### Test 2: Kill 3 Signers (Below Threshold — Fails)
-
-```bash
-docker stop deploy-signer-1-1 deploy-signer-2-1 deploy-signer-3-1
-sleep 3
-kubectl create token default
-# Expected error: "threshold sign: not enough signers: got 2, need 3"
-docker start deploy-signer-1-1 deploy-signer-2-1 deploy-signer-3-1
-```
-
-### Test 3: Coordinator HA Failover
-
-```bash
-docker stop deploy-grpc-proxy-1-1
-kubectl create token default | cut -d. -f1 | base64 -d
-# Expected: frost-k8s-v1 — nginx routes to proxy-2 or proxy-3
-docker start deploy-grpc-proxy-1-1
-```
-
-### Test 4: Signer Recovery
-
-```bash
-docker stop deploy-signer-1-1 && sleep 2
-docker start deploy-signer-1-1
-cd deploy && docker compose logs signer-1 | tail -5
-# Expected: [vault] Loaded key share for signer-1
-kubectl create token default | cut -d. -f1 | base64 -d
-```
-
----
-
-## 12. What Was Built
-
-### Critical Bugs Found During KEP-740 Integration
-
-Two subtle bugs were found that affect any from-scratch KEP-740 implementation:
-
-**Bug 1: Double base64 encoding of JWT payload**
-
-The KEP-740 proto comment states `claims` is "JSON-serialized and base64url-encoded." This is ambiguous: the apiserver sends claims *already* base64url-encoded. Re-encoding produces a signature over the wrong input — structurally valid but silently failing verification.
-
-```go
-// WRONG — re-encodes already-encoded payload
-payload := base64.RawURLEncoding.EncodeToString([]byte(req.Claims))
-
-// CORRECT — use claims directly as payload
-payload := req.Claims
-signingInput := header + "." + payload
-```
-
-**Bug 2: ECDSA signature format mismatch (ASN.1 DER vs IEEE P1363)**
-
-Go's `crypto/ecdsa` produces DER/ASN.1 signatures by default. Kubernetes uses go-jose which expects IEEE P1363 format (raw R‖S concatenation, 64 bytes for P-256). go-jose validates the fixed-length constraint silently and rejects DER signatures.
-
-```go
-// Convert ASN.1 DER → IEEE P1363 (raw r||s)
-func toP1363(sig []byte, keySize int) ([]byte, error) {
-    var rv struct{ R, S *big.Int }
-    if _, err := asn1.Unmarshal(sig, &rv); err != nil {
-        return nil, err
-    }
-    out := make([]byte, 2*keySize)
-    rv.R.FillBytes(out[:keySize])
-    rv.S.FillBytes(out[keySize:])
-    return out, nil
-}
-```
-
-These bugs affect any Go implementation of KEP-740 using the standard library without explicit format conversion.
-
-### Key Storage Hierarchy
-
-```
-Startup
-  ├── [Tier 1] HashiCorp Vault → Success ✅
-  ├── [Tier 2] AES-256-GCM Encrypted File → Fallback ✅
-  └── [Tier 3] Plain JSON (dev only) → Last resort ✅
-```
-
-### Features Implemented
-
-| Feature | Status |
+| What | Where |
 |---|---|
-| FROST 3-of-5 threshold signing | ✅ |
-| KEP-740 ExternalJWTSigner gRPC | ✅ |
-| Full Kubernetes integration | ✅ |
-| Parallel signer communication | ✅ |
-| mTLS coordinator ↔ signers | ✅ |
-| Coordinator HA (3 instances + nginx) | ✅ |
-| Vault key share storage | ✅ |
-| AES-256-GCM encrypted fallback | ✅ |
-| Distributed DKG ceremony | ✅ |
-| Failure tolerance (2-of-5) | ✅ |
-| Benchmark suite | ✅ |
+| Invariants I1–I10 (definition, enforcing code, tests) | [docs/INVARIANTS.md](docs/INVARIANTS.md) |
+| Unit / integration (T1–T12) | `make test`; `test/`, `internal/*/..._test.go` |
+| Image isolation (T13) | `make check-images`; negative control in `reports/gates/gate6-t13-negative-control.txt` |
+| Kubernetes e2e (single host) | `make e2e`; `reports/gates/gate6*.log`, `gate6.5*.log` |
+| Multi-host e2e + isolation (L1–L5) | `test/e2e/multihost.sh`; `reports/multihost/e2e-*/` (Level 1 and Level 2) |
+| Fresh-host reproduction | `make repro` / `.github/workflows/repro.yml`; [reports/REPRO.md](reports/REPRO.md), step logs in `reports/repro/` |
+| Benchmarks | `benchmark/results/*/summary.md` (generated from raw CSVs): final Phase 7C `20260927T131349Z-73be90f-7C`; 7A, 7B and Level 1 with their labels |
+| Phase 12 adversarial audit | [reports/audit/AUDIT.md](reports/audit/AUDIT.md) (mutation, fuzz, claims recheck) |
+| Claims audit | [reports/CLAIMS_AUDIT.md](reports/CLAIMS_AUDIT.md) |
+| Every discrepancy and finding | [NOTES.md](NOTES.md) |
 
----
+Every benchmark number must carry its label and have a row in a script-generated
+`summary.md`. **Final numbers: Phase 7C** (kubeadm v1.36.5 on AWS; B0 in-tree / B1 single-key
+external signer / T threshold, one session, 3 runs; NOTES N69–N74). Phase 7A (single host,
+2 vCPU, all components co-located; CPU-contended) and Phase 7B (Level 2, T only, one run per
+configuration) keep their labels; the Level 1 numbers remain **preliminary: arm64, multi-VM on
+one overloaded 16 GB host; not for publication**.
 
-## 13. Repository Structure
+## Licensing and patents
 
-```
-frost-k8s-threshold-signing/
-├── cmd/
-│   ├── grpc-proxy/        # gRPC proxy — ExternalJWTSigner coordinator
-│   ├── signer/            # Individual signer service
-│   ├── keygen/            # FROST key generation (development)
-│   ├── genkey/            # ECDSA signing key generation
-│   ├── encrypt-keys/      # AES-256-GCM key share encryption
-│   └── dkg-coordinator/   # Distributed DKG ceremony orchestrator
-├── internal/
-│   ├── grpcserver/        # ExternalJWTSigner gRPC implementation
-│   ├── signing/           # ECDSA key management (IEEE P1363 format)
-│   ├── froststate/        # FROST signer state + 3-tier key loading
-│   ├── coordinatorstate/  # FROST coordinator state
-│   ├── mtls/              # mTLS client factory
-│   ├── keystore/          # AES-256-GCM encryption/decryption
-│   └── dkg/               # Distributed Key Generation (Pedersen)
-├── proto/externaljwt/v1alpha1/  # KEP-740 gRPC service definition
-├── deploy/
-│   ├── docker-compose.yml       # 5 signers + 3 proxies + nginx + Vault
-│   ├── nginx-grpc.conf          # nginx gRPC upstream (coordinator HA)
-│   └── docker/                  # Dockerfiles
-├── benchmark/
-│   ├── run_benchmarks_frost.sh
-│   └── run_benchmarks_baseline.sh
-├── scripts/
-│   ├── restart-frost.sh   # One-command setup (macOS + Linux)
-│   └── vault-init.sh      # Load key shares into Vault
-└── certs/ data/           # Generated locally — not in git
-```
+- The threshold RSA dependency is **`github.com/niclabs/tcrsa` v0.0.5, used under the MIT
+  License** (see [NOTICE](NOTICE)). It is pinned to exactly that version.
+- **Later upstream versions of tcrsa reference US patent 10735188** in their license.
+- This repository is an **open-source research prototype**, licensed under the
+  **Apache License 2.0** ([LICENSE](LICENSE)). Apache-2.0 is compatible with tcrsa v0.0.5's MIT
+  license and with every other dependency (BSD-3-Clause, Apache-2.0, MIT).
+- **Any commercial use requires independent legal review.**
 
----
+## Defaults (final, NOTES N82)
 
-## 14. Known Limitations
+| Setting | Default | Notes |
+|---|---|---|
+| Verification | `VERIFY_STRATEGY=optimistic` plus the breaker | combine t shares and verify the final signature; suspects and a strict fallback after repeated failed combines (N65) |
+| Signer admission | `SIGNER_ADMISSION=n48` | deadline-aware bounded admission: `SIGNER_MAX_CONCURRENT` = CPU count, `SIGNER_MAX_QUEUE` = 64, deadline header capped at `SIGNER_MAX_DEADLINE` = 4 s (N48, N76) |
+| Quorum-impossible abort | `QUORUM_ABORT=off` | opt-in (`on`). Evaluated: it saves signer work under queueing, but by its pre-registered rule it raised retry-storm wait and amplification (N78, N81) |
+| Priority admission | off (`SIGNER_ADMISSION=n48`) | `priority` with controller `v1` or `v2` is selectable but **evaluated, not recommended**: neither met its pre-registered rules ([N78](NOTES.md), [N81](NOTES.md); `docs/PRIORITY_ADMISSION.md`, `docs/PRIORITY_ADMISSION_V2.md`) |
+| Coordinator identity | one client certificate per replica (`coordinator-<k>`, `COORDINATOR_ID`) | signers accept only that canonical form (N76) |
 
-> **Note:** Limitation labels (L1–L6) match the companion paper for cross-reference.
+## Operations notes
 
-**L1 — Signer co-location (primary security limitation).** All five signers run on the same Docker host in this prototype — providing no infrastructure independence. An attacker with host access can read all key shares simultaneously. This demonstrates the *signing protocol*, not a production-grade independent deployment. Production requires signers across independent infrastructure domains.
+- **Signers need reliable time sync.** Each signer rejects claims whose `iat` is more
+  than `clock_skew_seconds` (default 60 s) from its own clock, so a signer with a bad
+  clock refuses everything. Run chrony/NTP on every signer host and monitor its offset.
+  After a VM resume or snapshot restore, a signer fails closed until its clock resyncs
+  (docs/THREAT_MODEL.md §3, NOTES N44). The multihost scripts refuse to run when any host is
+  more than 1 s off (NOTES N50).
+- **Verification strategy.** Coordinators default to `VERIFY_STRATEGY=optimistic`:
+  combine t shares, verify only the final signature, and verify shares individually
+  only after a failed combine. A signer whose share fails verification becomes a
+  *suspect* for `BREAKER_SUSPECT_COOLDOWN` (default 10m): its shares are verified
+  before they are combined. `BREAKER_FALLBACK_AFTER` (default 3) failed combines within
+  `BREAKER_FALLBACK_WINDOW` (1m) switch to strict for `BREAKER_FALLBACK_COOLDOWN`
+  (10m). `strict` verifies shares until t are valid. Both strategies verify the final
+  signature against the group key before returning a token (NOTES N65).
+- **Timing logs.** nginx writes one JSON timing line per request, and the coordinators'
+  `signed`/`sign failed` lines carry `nginx_request_id`, `nginx_to_coordinator_ms`,
+  `queued_before_sign_ms` and `incoming_deadline_ms`; `benchmark/single/timing-breakdown.sh`
+  joins them (NOTES N64).
+- **Signer capacity.** Each signer computes at most `SIGNER_MAX_CONCURRENT` shares at once
+  (default: CPU count). Further requests wait only while they can still meet the
+  coordinator's deadline (sent in `X-Frost-Deadline-Ms`) and fewer than `SIGNER_MAX_QUEUE`
+  (default 64) are waiting; otherwise they get `503` immediately (NOTES N46, N48).
+- **Who can call Sign.** Only root on the coordinator host / control-plane node (the socket
+  directory is `root:root 0700`) and nginx holding the `lb` key. Nothing is published to the
+  host network (docs/THREAT_MODEL.md §1).
+- **Errors are generic by design.** A token requester sees only `token signing failed: …`;
+  which signer refused and why is in the coordinator log and the signers' audit logs (N33).
 
-**L2 — Coordinator-assisted DKG (primary research challenge).** The coordinator transiently holds all share material during key generation. Peer-to-peer DKG (`cmd/dkg-coordinator/`) is implemented but not yet integrated into the runtime signing path.
+## Repository layout
 
-**L3 — Per-signer mutex contention.** The `bytemare/frost` library is not safe for concurrent use. Each signer serializes requests via mutex, causing ~18% overhead at 50 concurrent requests. Fix requires a pool of independent Signer instances with careful session tracking.
-
-**L4 — Vault dev mode (no persistence).** Vault uses in-memory storage. Run `scripts/vault-init.sh` to reload shares after Vault restarts. Signers automatically fall back to encrypted file.
-
-**L5 — Coordinator HA within single Docker Compose.** Three proxy instances share the same deployment. Geographic distribution requires additional infrastructure.
-
-**L6 — Single-node benchmark environment.** All numbers include macOS Docker Desktop and socat bridge overhead. Production Linux bare-metal will differ.
-
----
-
-## 15. Future Work
-
-**Near-term:**
-- DKG integration with runtime signing — replace keygen shares with DKG-generated shares
-- Parallelized signing-session execution (reducing per-signer mutex contention)
-- Vault persistent storage (Raft backend, proper unseal)
-- Automated key rotation via FROST proactive secret resharing
-
-**Medium-term:**
-- Multi-node benchmarks on production-realistic clusters
-- Formal security verification (ProVerif/Tamarin)
-- Post-quantum readiness — crypto-agile proxy
-
-**Long-term:**
-- Kubernetes Operator for automated signer lifecycle
-- GKE/EKS/AKS support
-- HSM integration for signer key shares
-- Geographic signer distribution
-
----
-
-## 16. Troubleshooting
-
-### `kubectl create token` returns RS256
-
-kube-apiserver is still using the default single key.
-
-```bash
-# Check manifest
-docker exec minikube grep "signing" /etc/kubernetes/manifests/kube-apiserver.yaml
-# Should show: --service-account-signing-endpoint=/var/run/frost-k8s/signer.sock
-
-# Re-run setup
-bash scripts/restart-frost.sh
-```
-
-### `not enough signers: got 0, need 3`
-
-Proxy cannot reach signers — IPs may have changed after restart.
-
-```bash
-# Re-run (auto-detects new IPs)
-bash scripts/restart-frost.sh
-```
-
-### apiserver CrashLoopBackOff
-
-Socket doesn't exist when apiserver starts. Ensure `restart-frost.sh` completes successfully before patching the manifest.
-
-### `[vault] Failed, trying local`
-
-Vault restarted and lost in-memory data. Signers automatically fall back to encrypted file.
-
-```bash
-bash scripts/vault-init.sh
-cd deploy && docker compose restart signer-1 signer-2 signer-3 signer-4 signer-5
-```
-
-### `tls: client did not provide a certificate`
-
-mTLS certs missing or mismatched CA. Regenerate certs (Section 7, Step 5) ensuring all certs are signed by the same CA.
-
-### After Minikube Restart
-
-```bash
-bash scripts/restart-frost.sh
-```
-
----
-
-## Environment Variables
-
-| Variable | Component | Default | Description |
-|---|---|---|---|
-| `SIGNER_ID` | signer | required | Signer identity (1–5) |
-| `PORT` | signer | required | HTTP port (8081–8085) |
-| `VAULT_ADDR` | signer | — | Vault URL |
-| `VAULT_TOKEN` | signer | — | Vault auth token |
-| `FROST_KEY_PASSWORD` | signer | `frost-dev-password` | AES-256-GCM password |
-| `TLS_CERT` | signer | `certs/signer.crt` | Signer TLS cert |
-| `TLS_KEY` | signer | `certs/signer.key` | Signer TLS key |
-| `TLS_CA` | signer | `certs/ca.crt` | CA for client verification |
-| `SIGNER_1_ADDR`–`5_ADDR` | grpc-proxy | `https://signer-N:808N` | Signer addresses |
-| `SOCKET_PATH` | grpc-proxy | `/var/run/frost-k8s/signer.sock` | Unix socket path |
-| `KEY_ID` | grpc-proxy | `frost-k8s-v1` | JWT `kid` header |
-| `ECDSA_KEY_PATH` | grpc-proxy | `data/ecdsa-signing.pem` | ECDSA signing key |
-
----
-
-## Companion Research
-
-| # | Title | Venue | Status |
-|---|---|---|---|
-| 📖 Paper 1 | [Authentication Mechanisms in Kubernetes: A Systematic Review](https://doi.org/10.5281/zenodo.20734453) | Zenodo | Published |
-| 🔒 Paper 2 | [Threat Modeling and Security Analysis of Threshold-Based Token Signing](https://doi.org/10.5281/zenodo.20733863) | Zenodo | Published |
-| 🚀 Paper 3 | [frost-k8s: A FROST-Based Threshold Signing Proxy *(this repo)*](https://doi.org/10.5281/zenodo.20770308) | Zenodo + . '26 | Under Review |
-
----
-
-## Acknowledgments
-
-- [bytemare/frost](https://github.com/bytemare/frost) — FROST RFC 9591 Go implementation
-- [Kubernetes KEP-740](https://github.com/kubernetes/enhancements/) — ExternalJWTSigner API
-- [HashiCorp Vault](https://www.vaultproject.io/) — Secret management
-- [NIST IR 8214C](https://doi.org/10.6028/NIST.IR.8214C) — Multi-Party Threshold Schemes
-- [RFC 9591](https://www.rfc-editor.org/rfc/rfc9591) — FROST specification
+| Path | Contents |
+|---|---|
+| `cmd/dealer`, `cmd/signer`, `cmd/grpc-proxy` | Key ceremony, signer, coordinator (ExternalJWTSigner) |
+| `internal/` | `keymeta` (public), `keyshare` (one secret share), `policy`, `signer`, `coordinator`, `grpcserver`, `jwtfmt`, `wire`, `tlsconf`, `audit`, `dealer`, `testutil` (tests only) |
+| `deploy/` | Single-host compose, multi-host compose and scripts, nginx config, policy |
+| `test/`, `test/e2e/` | T1–T12 suite, kind e2e, multi-host orchestrator, probe |
+| `benchmark/` | `tokenbench` (client-go), `summarize`, drivers, results |
+| `spike/` | Phase 0 evidence that tcrsa produces RS256 tokens kube-apiserver's verifier accepts |
+| `legacy/frost/` | The abandoned FROST prototype (separate module, `//go:build legacy`) |
+| `docs/`, `reports/` | Threat model, key ceremony, claims audit, independence, history purge, gate evidence |

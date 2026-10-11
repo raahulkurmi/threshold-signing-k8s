@@ -1,0 +1,13 @@
+{
+  "topology": "7C T-same-region: 5 signers in ap-south-1 (3 AZs), one provider, one account, one operator, one build, one dealer", "transport": "ssh",
+  "deployed_at": "2026-10-03T17:31:33Z", "git_commit": "d07a8e7c46f1f5afeadfc8d0575e832e73b57f90", "kid": "XQC677lhbM8W0Bj0V8TAMg",
+  "coordinator_host": {"vm": "coord", "ip": "65.2.208.22", "placement": "aws:ap-south-1a:c7i-flex.large"}, "admin_ip": "110.226.115.89", "signer_host_ssh_allow": "any",
+  "signer_binary": {"go": "go1.27.1", "goarch": "amd64", "sha256": "eb324efc00300345f31dadc36b586700dd4a1128c279fafe935206696bcda896"},
+  "signers": [
+    {"signer_id": 1, "host": "ts-1", "ip": "13.201.44.146", "bind_ip": "172.31.38.20", "placement": "aws:ap-south-1a:t3.micro", "port": 8441, "os_user": "frost-signer-1", "share_index": 1, "cert_san": "signer-1", "cert_sha256": "F7:1E:8C:D1:4D:9A:82:C9:90:4E:95:FF:CE:74:37:1C:0B:4E:8C:88:35:C9:72:A0:66:6C:1E:75:8E:D7:EB:FA", "binary_sha256_on_host": "eb324efc00300345f31dadc36b586700dd4a1128c279fafe935206696bcda896"},
+    {"signer_id": 2, "host": "ts-2", "ip": "13.233.134.159", "bind_ip": "172.31.41.150", "placement": "aws:ap-south-1a:t3.micro", "port": 8441, "os_user": "frost-signer-2", "share_index": 2, "cert_san": "signer-2", "cert_sha256": "EB:EA:39:C8:08:A4:5D:C8:41:3A:A4:C1:33:6D:1E:09:83:26:6D:0B:3A:40:06:82:EB:BC:4D:2E:B4:E3:40:FA", "binary_sha256_on_host": "eb324efc00300345f31dadc36b586700dd4a1128c279fafe935206696bcda896"},
+    {"signer_id": 3, "host": "ts-3", "ip": "35.154.91.56", "bind_ip": "172.31.5.73", "placement": "aws:ap-south-1b:t3.micro", "port": 8441, "os_user": "frost-signer-3", "share_index": 3, "cert_san": "signer-3", "cert_sha256": "36:CB:5A:6C:59:95:16:A5:5F:F3:78:F4:18:03:92:81:E6:5E:DA:60:A9:55:86:44:D7:47:B5:46:C4:8C:66:BC", "binary_sha256_on_host": "eb324efc00300345f31dadc36b586700dd4a1128c279fafe935206696bcda896"},
+    {"signer_id": 4, "host": "ts-4", "ip": "3.110.208.81", "bind_ip": "172.31.0.56", "placement": "aws:ap-south-1b:t3.micro", "port": 8441, "os_user": "frost-signer-4", "share_index": 4, "cert_san": "signer-4", "cert_sha256": "31:A7:02:70:A6:56:EF:28:AB:74:B1:B7:2E:7A:78:13:B5:03:8A:0A:BE:45:B2:C6:95:FD:58:E3:02:47:C9:72", "binary_sha256_on_host": "eb324efc00300345f31dadc36b586700dd4a1128c279fafe935206696bcda896"},
+    {"signer_id": 5, "host": "ts-5", "ip": "3.108.225.164", "bind_ip": "172.31.18.150", "placement": "aws:ap-south-1c:t3.micro", "port": 8441, "os_user": "frost-signer-5", "share_index": 5, "cert_san": "signer-5", "cert_sha256": "28:07:9B:3E:4F:12:99:33:32:3A:F0:50:D3:49:D0:69:D8:D2:02:4F:DA:3B:DB:AF:F7:CC:C3:11:39:8B:A2:EE", "binary_sha256_on_host": "eb324efc00300345f31dadc36b586700dd4a1128c279fafe935206696bcda896"}
+  ]
+}

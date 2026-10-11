@@ -1,259 +1,318 @@
+// Command grpc-proxy is the threshold coordinator: a Kubernetes
+// ExternalJWTSigner (v1) that obtains RS256 signatures by combining >= t
+// threshold RSA signature shares from independent signers. It holds no
+// secret share and no private key (I3); only public metadata and its own
+// mTLS client certificate.
+//
+// Environment (required unless noted; anything missing aborts startup):
+//
+//	META_FILE          public-meta.json
+//	POLICY_FILE        the signers' claims policy (for max_token_expiration_seconds)
+//	SIGNER_ENDPOINTS   "1=https://signer-1:8443,2=https://signer-2:8443,..." (>= t entries)
+//	COORDINATOR_ID     1..64: this replica's identity; TLS_CERT must be its
+//	                   own cert (SAN exactly DNS:coordinator-<COORDINATOR_ID>, N76)
+//	TLS_CERT, TLS_KEY  this replica's client cert
+//	TLS_CA             CA that issued the signers' server certs
+//	SOCKET_PATH | TCP_ADDR  exactly one listener
+//	GRPC_TLS_CERT, GRPC_TLS_KEY, GRPC_TLS_CA  required with TCP_ADDR: the
+//	                   listener is mTLS only (own SAN exactly DNS:coordinator-grpc,
+//	                   clients must present SAN exactly DNS:lb). There is no
+//	                   plaintext TCP mode. SOCKET_PATH (local) uses no TLS.
+//	SIGN_DEADLINE      optional, Go duration, default 2s
+//	VERIFY_STRATEGY    optional, optimistic (default, N65) | strict
+//	BREAKER_SUSPECT_COOLDOWN  optional, Go duration, default 10m: how long a
+//	                   signer whose share failed verification has its shares
+//	                   verified before combining (optimistic only, N65)
+//	BREAKER_FALLBACK_AFTER    optional, default 3: failed optimistic combines
+//	                   within BREAKER_FALLBACK_WINDOW (default 1m) that switch
+//	                   to strict for BREAKER_FALLBACK_COOLDOWN (default 10m)
+//	REFRESH_HINT_SECONDS optional, default 3600
+//	FANOUT             optional, all (default) | hedged: contact t+1 signers
+//	                   first and the rest after HEDGE_DELAY or on a failure (N46)
+//	HEDGE_DELAY        optional, Go duration, default 50ms (hedged only)
+//	QUORUM_ABORT       optional, off (default) | on: fail a request as soon as
+//	                   t shares are impossible and cancel the rest (N76).
+//	                   Evaluated, off by default (N81: higher retry-storm wait)
 package main
 
 import (
-	"bytes"
-	"encoding/base64"
-	"encoding/json"
+	"context"
+	"errors"
 	"fmt"
-	"io"
+	"log/slog"
+	"net"
 	"net/http"
 	"os"
-	"sync"
+	"os/signal"
+	"sort"
+	"strconv"
+	"strings"
+	"syscall"
+	"time"
 
-	"github.com/bytemare/frost"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials"
 
-	"frost-k8s-threshold-signing/internal/api"
-	"frost-k8s-threshold-signing/internal/coordinatorstate"
+	"frost-k8s-threshold-signing/internal/coordinator"
 	"frost-k8s-threshold-signing/internal/grpcserver"
-	"frost-k8s-threshold-signing/internal/mtls"
-	"frost-k8s-threshold-signing/internal/signing"
+	"frost-k8s-threshold-signing/internal/keymeta"
+	"frost-k8s-threshold-signing/internal/policy"
+	"frost-k8s-threshold-signing/internal/tlsconf"
 )
-
-var signerAddresses = []string{
-	getEnv("SIGNER_1_ADDR", "https://signer-1:8081"),
-	getEnv("SIGNER_2_ADDR", "https://signer-2:8082"),
-	getEnv("SIGNER_3_ADDR", "https://signer-3:8083"),
-	getEnv("SIGNER_4_ADDR", "https://signer-4:8084"),
-	getEnv("SIGNER_5_ADDR", "https://signer-5:8085"),
-}
-
-const threshold = 3
-
-var (
-	socketPath   = getEnv("SOCKET_PATH", "/var/run/frost-k8s/signer.sock")
-	tcpAddr      = getEnv("TCP_ADDR", "")
-	keyID        = getEnv("KEY_ID", "frost-k8s-v1")
-	ecdsaKeyPath = getEnv("ECDSA_KEY_PATH", "data/ecdsa-signing.pem")
-	tlsCert      = getEnv("TLS_CERT", "certs/proxy.crt")
-	tlsKey       = getEnv("TLS_KEY", "certs/proxy.key")
-	tlsCA        = getEnv("TLS_CA", "certs/ca.crt")
-)
-
-var httpClient *http.Client
-
-func getEnv(key, fallback string) string {
-	if v := os.Getenv(key); v != "" {
-		return v
-	}
-	return fallback
-}
-
-func encodeBase64URL(data []byte) string {
-	return base64.RawURLEncoding.EncodeToString(data)
-}
-
-// collectCommitmentsParallel collects commitments from all signers in parallel.
-// FIX: Collects ALL results before selecting threshold — prevents goroutine leaks.
-func collectCommitmentsParallel() ([]api.CommitmentResponse, []string, error) {
-	type result struct {
-		commitment api.CommitmentResponse
-		addr       string
-		err        error
-	}
-
-	// Buffer = all signers so no goroutine ever blocks on send
-	results := make(chan result, len(signerAddresses))
-
-	for _, addr := range signerAddresses {
-		go func(a string) {
-			resp, err := httpClient.Post(a+"/commit", "application/json", nil)
-			if err != nil {
-				results <- result{addr: a, err: err}
-				return
-			}
-			defer resp.Body.Close()
-			var c api.CommitmentResponse
-			if err := json.NewDecoder(resp.Body).Decode(&c); err != nil {
-				results <- result{addr: a, err: err}
-				return
-			}
-			results <- result{commitment: c, addr: a}
-		}(addr)
-	}
-
-	// Collect ALL results — no early break, all goroutines finish cleanly
-	var commitments []api.CommitmentResponse
-	var activeSigners []string
-
-	for i := 0; i < len(signerAddresses); i++ {
-		r := <-results
-		if r.err != nil {
-			fmt.Printf("[proxy] Signer %s unavailable: %v\n", r.addr, r.err)
-			continue
-		}
-		// Only keep up to threshold — extras discarded but goroutine already done
-		if len(commitments) < threshold {
-			commitments = append(commitments, r.commitment)
-			activeSigners = append(activeSigners, r.addr)
-		}
-	}
-
-	if len(commitments) < threshold {
-		return nil, nil, fmt.Errorf("not enough signers: got %d, need %d", len(commitments), threshold)
-	}
-
-	return commitments, activeSigners, nil
-}
-
-// collectSharesParallel collects signature shares from active signers in parallel.
-func collectSharesParallel(message string, commitments []api.CommitmentResponse, activeSigners []string) ([]api.SignatureShareResponse, error) {
-	reqBody, _ := json.Marshal(api.SignRequest{Message: message, Commitments: commitments})
-
-	type result struct {
-		share api.SignatureShareResponse
-		err   error
-	}
-
-	// Buffer = active signers so no goroutine blocks
-	results := make(chan result, len(activeSigners))
-	var mu sync.Mutex
-	_ = mu
-
-	for _, addr := range activeSigners {
-		go func(a string) {
-			resp, err := httpClient.Post(a+"/sign", "application/json", bytes.NewReader(reqBody))
-			if err != nil {
-				results <- result{err: fmt.Errorf("sign from %s: %w", a, err)}
-				return
-			}
-			defer resp.Body.Close()
-			b, _ := io.ReadAll(resp.Body)
-			var share api.SignatureShareResponse
-			if err := json.Unmarshal(b, &share); err != nil {
-				results <- result{err: fmt.Errorf("decode share from %s: %w", a, err)}
-				return
-			}
-			results <- result{share: share}
-		}(addr)
-	}
-
-	var shares []api.SignatureShareResponse
-	for i := 0; i < len(activeSigners); i++ {
-		r := <-results
-		if r.err != nil {
-			return nil, r.err
-		}
-		shares = append(shares, r.share)
-	}
-
-	return shares, nil
-}
-
-func aggregateSignature(message string, commitments []api.CommitmentResponse, shares []api.SignatureShareResponse) (*frost.Signature, error) {
-	var commitmentList frost.CommitmentList
-	for _, item := range commitments {
-		c := &frost.Commitment{}
-		if err := c.DecodeHex(item.Commitment); err != nil {
-			return nil, err
-		}
-		commitmentList = append(commitmentList, c)
-	}
-	commitmentList.Sort()
-
-	var sigShares []*frost.SignatureShare
-	for _, item := range shares {
-		s := &frost.SignatureShare{}
-		if err := s.DecodeHex(item.Share); err != nil {
-			return nil, err
-		}
-		sigShares = append(sigShares, s)
-	}
-
-	return coordinatorstate.Config.AggregateSignatures([]byte(message), sigShares, commitmentList, true)
-}
-
-func makeSignFn(ecKey *signing.ECDSAKey) grpcserver.ThresholdSignFn {
-	return func(claimsB64 []byte) (string, string, error) {
-		payload := string(claimsB64)
-		headerJSON := []byte(fmt.Sprintf(`{"alg":"ES256","typ":"JWT","kid":"%s"}`, keyID))
-		header := encodeBase64URL(headerJSON)
-		signingInput := header + "." + payload
-
-		// Step 1: Collect commitments from threshold signers (parallel)
-		commitments, activeSigners, err := collectCommitmentsParallel()
-		if err != nil {
-			return "", "", err
-		}
-
-		// Step 2: Collect signature shares (parallel)
-		shares, err := collectSharesParallel(signingInput, commitments, activeSigners)
-		if err != nil {
-			return "", "", err
-		}
-
-		// Step 3: FROST aggregation — verify threshold signature is valid
-		// This validates that t-of-n signers genuinely collaborated
-		_, err = aggregateSignature(signingInput, commitments, shares)
-		if err != nil {
-			return "", "", fmt.Errorf("frost aggregate: %w", err)
-		}
-
-		// Step 4: ECDSA sign for K8s JWT verification compatibility
-		// (K8s uses go-jose which requires ECDSA/ES256 format)
-		signature, err := ecKey.SignES256(signingInput)
-		if err != nil {
-			return "", "", fmt.Errorf("ecdsa sign: %w", err)
-		}
-
-		fmt.Fprintf(os.Stderr, "[proxy] Signed JWT — kid=%s active_signers=%v\n", keyID, activeSigners)
-		return header, signature, nil
-	}
-}
 
 func main() {
-	if err := coordinatorstate.Init(); err != nil {
-		fmt.Fprintf(os.Stderr, "ERROR: %v\n", err)
+	logger := slog.New(slog.NewJSONHandler(os.Stderr, nil))
+	if err := run(context.Background(), os.Getenv, logger); err != nil {
+		logger.Error("coordinator failed", "err", err.Error())
 		os.Exit(1)
 	}
+}
 
-	var err error
-	httpClient, err = mtls.NewClient(tlsCert, tlsKey, tlsCA)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "ERROR loading mTLS certs: %v\n", err)
-		os.Exit(1)
+type settings struct {
+	CoordID     int
+	Abort       bool
+	Meta        *keymeta.Meta
+	MaxToken    int64
+	Endpoints   []coordinator.Endpoint
+	Deadline    time.Duration
+	Strategy    coordinator.Strategy
+	Fanout      coordinator.Fanout
+	HedgeDelay  time.Duration
+	Breaker     coordinator.BreakerConfig
+	RefreshHint int64
+	Socket      string
+	TCP         string
+	GRPCCert    string
+	GRPCKey     string
+	GRPCCA      string
+}
+
+func require(getenv func(string) string, name string) (string, error) {
+	if v := getenv(name); v != "" {
+		return v, nil
 	}
+	return "", fmt.Errorf("%s is not set", name)
+}
 
-	ecKey, err := signing.NewECDSAKey(ecdsaKeyPath)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "ERROR: %v\n", err)
-		os.Exit(1)
-	}
-
-	pkix, err := ecKey.PublicKeyPKIX()
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "ERROR: %v\n", err)
-		os.Exit(1)
-	}
-
-	srv, err := grpcserver.New(makeSignFn(ecKey), keyID, pkix)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "ERROR: %v\n", err)
-		os.Exit(1)
-	}
-
-	if tcpAddr != "" {
-		fmt.Printf("[proxy] TCP mode — addr=%s key=%s threshold=%d\n", tcpAddr, keyID, threshold)
-		if err := grpcserver.ListenAndServeTCP(tcpAddr, srv); err != nil {
-			fmt.Fprintf(os.Stderr, "ERROR: %v\n", err)
-			os.Exit(1)
+// parseEndpoints parses "1=https://signer-1:8443,2=...".
+func parseEndpoints(s string) (map[int]string, error) {
+	out := map[int]string{}
+	for _, part := range strings.Split(s, ",") {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
 		}
-		return
+		idStr, url, ok := strings.Cut(part, "=")
+		if !ok {
+			return nil, fmt.Errorf("SIGNER_ENDPOINTS entry %q is not id=url", part)
+		}
+		id, err := strconv.Atoi(idStr)
+		if err != nil {
+			return nil, fmt.Errorf("SIGNER_ENDPOINTS id %q is not an integer", idStr)
+		}
+		if _, dup := out[id]; dup {
+			return nil, fmt.Errorf("SIGNER_ENDPOINTS lists signer %d twice", id)
+		}
+		if !strings.HasPrefix(url, "https://") {
+			return nil, fmt.Errorf("SIGNER_ENDPOINTS signer %d url %q must be https://", id, url)
+		}
+		out[id] = url
+	}
+	if len(out) == 0 {
+		return nil, errors.New("SIGNER_ENDPOINTS is empty")
+	}
+	return out, nil
+}
+
+func load(getenv func(string) string) (*settings, error) {
+	var s settings
+	metaPath, err := require(getenv, "META_FILE")
+	if err != nil {
+		return nil, err
+	}
+	if s.Meta, err = keymeta.Load(metaPath); err != nil {
+		return nil, err
+	}
+	policyPath, err := require(getenv, "POLICY_FILE")
+	if err != nil {
+		return nil, err
+	}
+	pol, err := policy.Load(policyPath)
+	if err != nil {
+		return nil, err
+	}
+	s.MaxToken = pol.MaxTokenSeconds()
+
+	epStr, err := require(getenv, "SIGNER_ENDPOINTS")
+	if err != nil {
+		return nil, err
+	}
+	eps, err := parseEndpoints(epStr)
+	if err != nil {
+		return nil, err
+	}
+	idStr, err := require(getenv, "COORDINATOR_ID")
+	if err != nil {
+		return nil, err
+	}
+	if s.CoordID, err = strconv.Atoi(idStr); err != nil || s.CoordID < 1 || s.CoordID > tlsconf.MaxCoordinators {
+		return nil, fmt.Errorf("COORDINATOR_ID %q must be an integer in [1,%d]", idStr, tlsconf.MaxCoordinators)
+	}
+	switch v := getenv("QUORUM_ABORT"); v {
+	case "", "off":
+	case "on":
+		s.Abort = true
+	default:
+		return nil, fmt.Errorf("QUORUM_ABORT %q must be on or off", v)
+	}
+	cert, err := require(getenv, "TLS_CERT")
+	if err != nil {
+		return nil, err
+	}
+	key, err := require(getenv, "TLS_KEY")
+	if err != nil {
+		return nil, err
+	}
+	ca, err := require(getenv, "TLS_CA")
+	if err != nil {
+		return nil, err
+	}
+	ids := make([]int, 0, len(eps))
+	for id := range eps {
+		ids = append(ids, id)
+	}
+	sort.Ints(ids)
+	for _, id := range ids {
+		tc, err := tlsconf.CoordinatorClient(cert, key, ca, id, s.CoordID)
+		if err != nil {
+			return nil, err
+		}
+		s.Endpoints = append(s.Endpoints, coordinator.Endpoint{
+			ID:  id,
+			URL: eps[id],
+			Client: &http.Client{Transport: &http.Transport{
+				TLSClientConfig:     tc,
+				ForceAttemptHTTP2:   true,
+				MaxIdleConnsPerHost: 64,
+				IdleConnTimeout:     90 * time.Second,
+				DialContext:         (&net.Dialer{Timeout: 2 * time.Second, KeepAlive: 30 * time.Second}).DialContext,
+			}},
+		})
 	}
 
-	_ = os.MkdirAll("/var/run/frost-k8s", 0750)
-	fmt.Printf("[proxy] Unix mode — socket=%s key=%s threshold=%d\n", socketPath, keyID, threshold)
-	if err := grpcserver.ListenAndServe(socketPath, srv); err != nil {
-		fmt.Fprintf(os.Stderr, "ERROR: %v\n", err)
-		os.Exit(1)
+	s.Deadline = 2 * time.Second
+	if v := getenv("SIGN_DEADLINE"); v != "" {
+		if s.Deadline, err = time.ParseDuration(v); err != nil || s.Deadline <= 0 {
+			return nil, fmt.Errorf("SIGN_DEADLINE %q is not a positive duration", v)
+		}
+	}
+	s.Strategy = coordinator.Optimistic
+	if v := getenv("VERIFY_STRATEGY"); v != "" {
+		if s.Strategy, err = coordinator.ParseStrategy(v); err != nil {
+			return nil, err
+		}
+	}
+	s.Fanout = coordinator.FanoutAll
+	if v := getenv("FANOUT"); v != "" {
+		if s.Fanout, err = coordinator.ParseFanout(v); err != nil {
+			return nil, err
+		}
+	}
+	s.HedgeDelay = 50 * time.Millisecond
+	if v := getenv("HEDGE_DELAY"); v != "" {
+		if s.HedgeDelay, err = time.ParseDuration(v); err != nil || s.HedgeDelay <= 0 {
+			return nil, fmt.Errorf("HEDGE_DELAY %q is not a positive duration", v)
+		}
+	}
+	for _, d := range []struct {
+		dst  *time.Duration
+		name string
+	}{{&s.Breaker.SuspectCooldown, "BREAKER_SUSPECT_COOLDOWN"}, {&s.Breaker.FallbackWindow, "BREAKER_FALLBACK_WINDOW"}, {&s.Breaker.FallbackCooldown, "BREAKER_FALLBACK_COOLDOWN"}} {
+		if v := getenv(d.name); v != "" {
+			if *d.dst, err = time.ParseDuration(v); err != nil || *d.dst <= 0 {
+				return nil, fmt.Errorf("%s %q is not a positive duration", d.name, v)
+			}
+		}
+	}
+	if v := getenv("BREAKER_FALLBACK_AFTER"); v != "" {
+		if s.Breaker.FallbackAfter, err = strconv.Atoi(v); err != nil || s.Breaker.FallbackAfter < 1 {
+			return nil, fmt.Errorf("BREAKER_FALLBACK_AFTER %q must be an integer >= 1", v)
+		}
+	}
+	s.RefreshHint = 3600
+	if v := getenv("REFRESH_HINT_SECONDS"); v != "" {
+		if s.RefreshHint, err = strconv.ParseInt(v, 10, 64); err != nil || s.RefreshHint <= 0 {
+			return nil, fmt.Errorf("REFRESH_HINT_SECONDS %q must be a positive integer", v)
+		}
+	}
+	s.Socket, s.TCP = getenv("SOCKET_PATH"), getenv("TCP_ADDR")
+	if (s.Socket == "") == (s.TCP == "") {
+		return nil, errors.New("set exactly one of SOCKET_PATH or TCP_ADDR")
+	}
+	if s.TCP != "" {
+		for _, p := range []struct {
+			dst  *string
+			name string
+		}{{&s.GRPCCert, "GRPC_TLS_CERT"}, {&s.GRPCKey, "GRPC_TLS_KEY"}, {&s.GRPCCA, "GRPC_TLS_CA"}} {
+			if *p.dst, err = require(getenv, p.name); err != nil {
+				return nil, fmt.Errorf("TCP_ADDR requires mTLS: %w", err)
+			}
+		}
+	}
+	return &s, nil
+}
+
+func run(ctx context.Context, getenv func(string) string, logger *slog.Logger) error {
+	s, err := load(getenv)
+	if err != nil {
+		return err
+	}
+	coord, err := coordinator.New(coordinator.Config{Meta: s.Meta, Endpoints: s.Endpoints, Deadline: s.Deadline, Strategy: s.Strategy,
+		Fanout: s.Fanout, HedgeDelay: s.HedgeDelay, Breaker: s.Breaker, Logger: logger, QuorumAbort: s.Abort})
+	if err != nil {
+		return err
+	}
+	srv, err := grpcserver.New(coord, s.Meta, s.MaxToken, s.RefreshHint)
+	if err != nil {
+		return err
+	}
+	var lis net.Listener
+	var opts []grpc.ServerOption
+	if s.Socket != "" {
+		lis, err = grpcserver.ListenUnix(s.Socket)
+	} else {
+		tc, terr := tlsconf.CoordinatorGRPCServer(s.GRPCCert, s.GRPCKey, s.GRPCCA)
+		if terr != nil {
+			return terr
+		}
+		opts = append(opts, grpc.Creds(credentials.NewTLS(tc)))
+		lis, err = net.Listen("tcp", s.TCP)
+	}
+	if err != nil {
+		return err
+	}
+	g := grpcserver.NewGRPC(srv, opts...)
+	bc := coord.BreakerConfig()
+	ids := make([]int, len(s.Endpoints))
+	for i, ep := range s.Endpoints {
+		ids[i] = ep.ID
+	}
+	logger.Info("coordinator ready", "coordinator_id", s.CoordID, "quorum_abort", s.Abort, "kid", s.Meta.KID, "threshold", s.Meta.Threshold, "parties", s.Meta.Parties,
+		"signers", ids, "listen", lis.Addr().String(), "deadline", s.Deadline.String(), "strategy", s.Strategy,
+		"fanout", s.Fanout, "hedge_delay", s.HedgeDelay.String(),
+		"breaker_suspect_cooldown", bc.SuspectCooldown.String(), "breaker_fallback_after", bc.FallbackAfter,
+		"breaker_fallback_window", bc.FallbackWindow.String(), "breaker_fallback_cooldown", bc.FallbackCooldown.String(),
+		"max_token_seconds", s.MaxToken, "grpc_mtls", s.TCP != "")
+
+	ctx, stop := signal.NotifyContext(ctx, syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
+	errc := make(chan error, 1)
+	go func() { errc <- g.Serve(lis) }()
+	select {
+	case err := <-errc:
+		return err
+	case <-ctx.Done():
+		g.GracefulStop()
+		return nil
 	}
 }

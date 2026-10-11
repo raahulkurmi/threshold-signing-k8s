@@ -1,0 +1,179 @@
+#!/usr/bin/env bash
+# deploy.sh: deploy the multi-host topology from the OPERATOR machine (the
+# dealer). It provisions no VMs and touches no cloud account: the hosts must
+# already exist (see deploy/multihost/README.md). The transport comes from the
+# topology (deploy/multihost/transport.sh): Level 1 drives local Multipass VMs
+# (TRANSPORT=multipass), Level 2 reaches EC2 hosts over ssh/scp (TRANSPORT=ssh).
+#
+#   1. builds the signer binary with the pinned toolchain; records its sha256
+#   2. runs the key ceremony in a 0700 temp dir: fresh certs + 3-of-5 key
+#   3. stages, per signer host, EXACTLY the shares the topology assigns to it
+#      (refuses anything else), ships it, runs setup-signer-host.sh there
+#   4. installs only public metadata + coordinator-side certs on the
+#      coordinator host (never a share), restricts coordinator egress
+#   5. writes a public manifest and securely deletes the ceremony dir
+#
+# Usage: deploy/multihost/deploy.sh [topology.env]   (default: topology.local.env)
+set -euo pipefail
+cd "$(dirname "$0")/../.."
+REPO="$(pwd)"
+TOPO="${1:-deploy/multihost/topology.local.env}"
+# shellcheck disable=SC1090
+source "$TOPO"
+export GOTOOLCHAIN=go1.27.1
+
+die() { echo "deploy: $*" >&2; exit 1; }
+command -v jq >/dev/null || die "jq not found"
+# shellcheck disable=SC1091
+source deploy/multihost/transport.sh
+[[ "$TRANSPORT" != multipass ]] || command -v multipass >/dev/null || die "multipass not found"
+TOPOLOGY_LABEL="${TOPOLOGY_LABEL:-multi-VM, single physical host (Level 1); not infrastructure independence}"
+SSH_ALLOW="${SSH_ALLOW:-$ADMIN_IP}"   # signer-host nftables SSH source; "any" = enforced by the cloud SG only (N57)
+placement() { _map_get "${HOST_PLACEMENT:-}" "$1" || echo "local Multipass VM on the operator Mac"; }
+# Phase 7C options (NOTES N67); the defaults keep Level 1/2 behaviour:
+COORD_SECRETS_DIR="${COORD_SECRETS_DIR:-secrets}"   # dir under ~/tk8s on the coordinator host
+LB_HOST="${LB_HOST:-}" LB_DIR="${LB_DIR:-}"         # if set: nginx's lb cert + CA go there (root, 0600), not to the coordinator host
+MANIFEST_OUT="${MANIFEST_OUT:-reports/multihost/deploy-manifest.json}"
+
+# --- topology: each signer id exactly once, 1..5 (portable to macOS bash 3.2) ---
+id_vm()   { local s; for s in $SIGNERS; do [[ "${s%%:*}" == "$1" ]] && { s="${s#*:}"; echo "${s%%:*}"; return; }; done; }
+id_port() { local s; for s in $SIGNERS; do [[ "${s%%:*}" == "$1" ]] && { echo "${s##*:}"; return; }; done; }
+vm_ids()  { local s out=""; for s in $SIGNERS; do local r="${s#*:}"; [[ "${r%%:*}" == "$1" ]] && out="$out ${s%%:*}"; done; echo "$out"; }
+SIGNER_VMS="$(for s in $SIGNERS; do r="${s#*:}"; echo "${r%%:*}"; done | sort -u | tr '\n' ' ')"
+# Audit E-2: exactly one listing per signer, no share on the coordinator host,
+# and at most t-1 shares on any host (deploy/multihost/topology-guard.sh).
+DEALER_THRESHOLD=3   # cmd/dealer default (3-of-5); checked against public-meta.json after the ceremony
+# shellcheck disable=SC1091
+source deploy/multihost/topology-guard.sh
+why="$(topology_guard "$COORD_VM" "$DEALER_THRESHOLD" "$SIGNERS")" || die "unsafe topology in $TOPO: $why"
+
+COORD_IP="$(vm_ip "$COORD_VM")"; [[ -n "$COORD_IP" ]] || die "no IP for $COORD_VM"
+VM_IP_LIST=""
+for vm in $SIGNER_VMS; do ip="$(vm_ip "$vm")"; [[ -n "$ip" ]] || die "no IP for $vm"; VM_IP_LIST="$VM_IP_LIST $vm=$ip"; done
+vm_ip_of() { local p; for p in $VM_IP_LIST; do [[ "${p%%=*}" == "$1" ]] && { echo "${p#*=}"; return; }; done; }
+echo "coordinator host $COORD_VM $COORD_IP; admin $ADMIN_IP"
+for vm in $SIGNER_VMS; do echo "signer host $vm $(vm_ip_of "$vm") (binds $(vm_bind_ip "$vm"); $(placement "$vm")): signers$(vm_ids "$vm")"; done
+# Mandatory pre-run step (N50): force time resync and require every VM to be
+# within 1 s of the operator clock; a skewed signer refuses every token (N44).
+# shellcheck disable=SC1091
+source deploy/multihost/clock-check.sh
+clock_check "$COORD_VM" $SIGNER_VMS || die "clock skew check failed (N50)"
+
+
+W="$(mktemp -d "${TMPDIR:-/tmp}/frost-ceremony.XXXXXX")"
+chmod 700 "$W"
+cleanup() {
+  # Best-effort secure delete of every share, key and the CA key (APFS/SSD: see README).
+  find "$W" -type f \( -name 'share*.json' -o -name '*.key' -o -name '*.tgz' \) -exec rm -P {} + 2>/dev/null || true   # *.key includes priority.key
+  rm -rf "$W"
+}
+trap cleanup EXIT
+umask 077
+
+# --- 1. binary (pinned toolchain, reproducible flags) ---
+ARCH="$(on "$COORD_VM" dpkg --print-architecture | tr -d '\r')"
+CGO_ENABLED=0 GOOS=linux GOARCH="$ARCH" go build -trimpath -ldflags="-s -w -buildid=" -o "$W/frost-signer" ./cmd/signer
+BIN_SHA="$(shasum -a 256 "$W/frost-signer" | cut -d' ' -f1)"
+echo "signer binary: $(go version | cut -d' ' -f3) linux/$ARCH sha256 $BIN_SHA"
+
+# --- 2. ceremony ---
+scripts/gen-certs.sh --out "$W/pki" >/dev/null
+go build -o "$W/dealer" ./cmd/dealer
+"$W/dealer" --out "$W/keys" | sed 's#'"$W"'#<ceremony>#'
+KID="$(jq -r .kid "$W/keys/public-meta.json")"
+[[ "$(jq -r .threshold "$W/keys/public-meta.json")" == "$DEALER_THRESHOLD" ]] || die "dealer threshold differs from DEALER_THRESHOLD=$DEALER_THRESHOLD used by the topology guard (audit E-2)"
+
+# --- 3. stage + ship per signer host, one assignment each ---
+stage_host() { # vm
+  local vm="$1" d="$W/stage-$1"
+  mkdir -p "$d/common"
+  cp "$W/frost-signer" "$d/frost-signer"
+  cp "$W/keys/public-meta.json" deploy/policy.json "$d/common/"
+  cp "$W/pki/tls/ca.crt" "$d/common/ca.crt"
+  for id in $(vm_ids "$vm"); do
+    mkdir -p "$d/signer-$id"
+    cp "$W/keys/share-$id.json" "$d/signer-$id/share.json"
+    cp "$W/keys/priority.key" "$d/signer-$id/priority.key"   # N76: same key at every signer
+    cp "$W/pki/tls/signer-$id/tls.crt" "$W/pki/tls/signer-$id/tls.key" "$d/signer-$id/"
+  done
+  # Guard: exactly the assigned shares, each with the right signer_index.
+  local want n
+  want=$(wc -w <<<"$(vm_ids "$vm")" | tr -d ' ')
+  n=$(find "$d" -name 'share*.json' | wc -l | tr -d ' ')
+  [[ "$n" -eq "$want" ]] || die "REFUSING to ship $n shares to $vm (assigned:$(vm_ids "$vm"))"
+  for id in $(vm_ids "$vm"); do
+    [[ "$(jq -r .signer_index "$d/signer-$id/share.json")" == "$id" ]] || die "share for signer $id has wrong index"
+  done
+  if [[ -n "$(find "$d" -path '*/pki/ca/*' -o -name 'ca.key')" ]]; then die "CA key staged for $vm"; fi
+  COPYFILE_DISABLE=1 tar --no-xattrs --no-mac-metadata -C "$d" -czf "$W/stage-$vm.tgz" .
+}
+
+HOST_SHA_LIST=""
+for vm in $SIGNER_VMS; do
+  stage_host "$vm"
+  specs=""
+  for id in $(vm_ids "$vm"); do specs="$specs $id:$(id_port "$id")"; done
+  push "$vm" "$W/stage-$vm.tgz" /tmp/frost-stage.tgz
+  on "$vm" sudo bash -c 'set -e; umask 077; rm -rf /root/frost-stage; mkdir /root/frost-stage; tar -xzf /tmp/frost-stage.tgz -C /root/frost-stage; shred -u /tmp/frost-stage.tgz'
+  # shellcheck disable=SC2086
+  # SIGNER_SOURCE_IP: the address the signers see the coordinator connect from
+  # (7C same-region: its private IP); default its reach address.
+  on_pipe "$vm" sudo bash -s -- /root/frost-stage "${SIGNER_SOURCE_IP:-$COORD_IP}" "$SSH_ALLOW" "$(vm_bind_ip "$vm")" $specs < deploy/multihost/setup-signer-host.sh
+  hs="$(on "$vm" sha256sum /usr/local/bin/frost-signer | cut -d' ' -f1 | tr -d '\r')"
+  [[ "$hs" == "$BIN_SHA" ]] || die "binary on $vm has sha256 $hs, built $BIN_SHA"
+  HOST_SHA_LIST="$HOST_SHA_LIST $vm=$hs"
+done
+host_sha() { local p; for p in $HOST_SHA_LIST; do [[ "${p%%=*}" == "$1" ]] && { echo "${p#*=}"; return; }; done; }
+
+# --- 4. coordinator host: public meta + coordinator-side certs only ---
+C="$W/stage-coord"
+mkdir -p "$C/keys" "$C/tls"
+cp "$W/keys/public-meta.json" "$C/keys/"
+cp "$W/pki/tls/ca.crt" "$C/tls/"
+cp -r "$W/pki/tls/coordinator-1" "$W/pki/tls/coordinator-2" "$W/pki/tls/coordinator-3" "$W/pki/tls/coordinator-grpc" "$C/tls/"   # one client cert per replica (N76)
+[[ -n "$LB_HOST" ]] || cp -r "$W/pki/tls/lb" "$C/tls/"
+ENDPOINTS=""
+for id in 1 2 3 4 5; do ENDPOINTS="${ENDPOINTS:+$ENDPOINTS,}$id=https://$(vm_service_ip "$(id_vm "$id")"):$(id_port "$id")"; done
+printf 'SIGNER_ENDPOINTS=%s\nN4_OPERATOR_TARGET=%s:22\n' "$ENDPOINTS" "$ADMIN_IP" > "$C/multihost.env"
+[[ -z "$(find "$C" -name 'share*' -o -name 'priority*' -o -name 'ca.key' -o -path '*signer-*')" ]] || die "REFUSING: share, priority key, CA key or signer cert staged for the coordinator host"
+COPYFILE_DISABLE=1 tar --no-xattrs --no-mac-metadata -C "$C" -czf "$W/stage-coord.tgz" .
+push "$COORD_VM" "$W/stage-coord.tgz" /tmp/frost-coord.tgz
+on "$COORD_VM" bash -c "set -e; cd ~/tk8s; rm -rf $COORD_SECRETS_DIR; umask 077; mkdir $COORD_SECRETS_DIR; tar -xzf /tmp/frost-coord.tgz -C $COORD_SECRETS_DIR; shred -u /tmp/frost-coord.tgz; chmod 644 $COORD_SECRETS_DIR/keys/public-meta.json $COORD_SECRETS_DIR/tls/ca.crt $COORD_SECRETS_DIR/tls/*/tls.crt"
+if [[ -n "$LB_HOST" ]]; then
+  L="$W/stage-lb"; mkdir -p "$L"
+  cp "$W/pki/tls/lb/tls.crt" "$W/pki/tls/lb/tls.key" "$W/pki/tls/ca.crt" "$L/"
+  COPYFILE_DISABLE=1 tar --no-xattrs --no-mac-metadata -C "$L" -czf "$W/stage-lb.tgz" .
+  push "$LB_HOST" "$W/stage-lb.tgz" /tmp/frost-lb.tgz
+  on "$LB_HOST" sudo bash -c "set -e; umask 077; rm -rf $LB_DIR; install -d -o root -g root -m 0700 $LB_DIR; tar -xzf /tmp/frost-lb.tgz -C $LB_DIR; chown -R root:root $LB_DIR; chmod 0600 $LB_DIR/*; shred -u /tmp/frost-lb.tgz"
+  echo "lb client cert + CA installed on $LB_HOST:$LB_DIR (root, 0600)"
+fi
+EGRESS=""
+for id in 1 2 3 4 5; do EGRESS="$EGRESS $(vm_service_ip "$(id_vm "$id")"):$(id_port "$id")"; done
+# shellcheck disable=SC2086
+on_pipe "$COORD_VM" sudo bash -s -- 172.30.3.0/24 $EGRESS < deploy/multihost/coordinator-egress.sh
+
+# --- 5. public manifest ---
+mkdir -p reports/multihost
+MAN="$MANIFEST_OUT"; mkdir -p "$(dirname "$MAN")"
+# Audit G-2: a committed manifest is session evidence; never overwrite it.
+! git ls-files --error-unmatch "$MAN" >/dev/null 2>&1 || die "refusing to overwrite committed evidence $MAN; set MANIFEST_OUT to a new per-session path (audit G-2)"
+{
+  echo "{"
+  echo "  \"topology\": \"$TOPOLOGY_LABEL\", \"transport\": \"$TRANSPORT\","
+  echo "  \"deployed_at\": \"$(date -u +%Y-%m-%dT%H:%M:%SZ)\", \"git_commit\": \"$(git rev-parse HEAD)\", \"kid\": \"$KID\","
+  echo "  \"coordinator_host\": {\"vm\": \"$COORD_VM\", \"ip\": \"$COORD_IP\", \"placement\": \"$(placement "$COORD_VM")\"}, \"admin_ip\": \"$ADMIN_IP\", \"signer_host_ssh_allow\": \"$SSH_ALLOW\","
+  echo "  \"signer_binary\": {\"go\": \"$(go version | cut -d' ' -f3)\", \"goarch\": \"$ARCH\", \"sha256\": \"$BIN_SHA\"},"
+  echo "  \"signers\": ["
+  first=1
+  for id in 1 2 3 4 5; do
+    vm="$(id_vm "$id")"
+    fp="$(openssl x509 -in "$W/pki/tls/signer-$id/tls.crt" -noout -fingerprint -sha256 | cut -d= -f2)"
+    [[ $first == 1 ]] || echo ","
+    first=0
+    printf '    {"signer_id": %s, "host": "%s", "ip": "%s", "bind_ip": "%s", "placement": "%s", "port": %s, "os_user": "frost-signer-%s", "share_index": %s, "cert_san": "signer-%s", "cert_sha256": "%s", "binary_sha256_on_host": "%s"}' \
+      "$id" "$vm" "$(vm_ip_of "$vm")" "$(vm_bind_ip "$vm")" "$(placement "$vm")" "$(id_port "$id")" "$id" "$id" "$id" "$fp" "$(host_sha "$vm")"
+  done
+  echo; echo "  ]"; echo "}"
+} > "$MAN"
+jq . "$MAN" >/dev/null
+echo "deployed kid $KID; manifest $MAN; ceremony directory deleted on exit"

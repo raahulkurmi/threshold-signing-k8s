@@ -1,6 +1,10 @@
 # binaries
 bin/
 dist/
+/grpc-proxy
+/signer
+/coordinator
+/dealer
 
 # mac
 .DS_Store
@@ -11,5 +15,30 @@ dist/
 
 # logs
 *.log
-data/frost-keys.json
-data/ecdsa-signing.pem
+# ...except evidence logs, which reports and NOTES cite (gitleaks-scanned before commit)
+!reports/**/*.log
+!benchmark/results/**/*.log
+nohup.out
+
+# secret material: never commit (I10)
+certs/
+data/
+secrets/
+out/
+*.key
+*.pem
+*.enc
+*.csr
+*.srl
+share-*.json
+run/
+audit/
+# ...except the Phase 12 audit report (audit fix: the reports must be tracked)
+!reports/audit/
+test/e2e/results/*/kind-config.yaml
+bin/
+.summarize
+reports/repro-logs/
+deploy/aws/state/
+__pycache__/
+*.pyc

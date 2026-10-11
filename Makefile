@@ -1,0 +1,62 @@
+# frost-k8s: threshold RSA ExternalJWTSigner
+export GOTOOLCHAIN := go1.27.1
+
+.PHONY: all build vet lint vuln repro test test-unit test-malicious test-spike check-images e2e e2e-keep e2e-down legacy
+
+all: build vet test
+
+build:
+	go build ./...
+
+vet:
+	go vet ./...
+	go vet -tags testmalicious ./...
+	cd spike && go vet ./...
+
+## staticcheck (as in CI).
+lint:
+	staticcheck ./...
+	staticcheck -tags testmalicious ./...
+
+## govulncheck; fails on reachable vulns not accepted in reports/ci/govulncheck-accepted.txt.
+vuln:
+	scripts/govulncheck.sh
+	scripts/govulncheck.sh benchmark
+
+## Fresh Ubuntu 24.04 host only: install pinned tools, test, check-images, e2e -> reports/REPRO.md.
+repro:
+	scripts/repro.sh
+
+## Unit + integration (T1–T12) + T5 with the test-only malicious signer build tag
+## + the spike tcrsa hazard tests cited by THREAT_MODEL §5 (separate module; audit C-7).
+test: test-unit test-malicious test-spike
+
+test-unit:
+	go test -count=1 -timeout 30m ./...
+
+test-malicious:
+	go test -count=1 -timeout 30m -tags testmalicious -run 'TestMaliciousSignerExcluded' -v ./test/
+
+test-spike:
+	cd spike && go test -count=1 -timeout 30m -v .
+
+## T13: no secret material in any image layer (needs docker).
+check-images:
+	scripts/check-images.sh
+
+## Kubernetes e2e (E1–E8). Linux host with Docker Engine only.
+e2e:
+	test/e2e/run.sh
+
+e2e-keep:
+	test/e2e/run.sh --keep
+
+e2e-down:
+	-kind delete cluster --name tk8s
+	-FROST_UID=$$(id -u) docker compose -p tk8s -f deploy/docker-compose.yml down -v --remove-orphans
+	rm -rf secrets audit bin/e2e
+	-sudo rm -rf run
+
+## The abandoned FROST prototype still compiles behind its tag.
+legacy:
+	cd legacy/frost && go build -tags legacy ./...
