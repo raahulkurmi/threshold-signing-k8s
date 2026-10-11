@@ -1,4 +1,4 @@
-# frost-k8s-threshold-signing
+#threshold-signing
 
 **Threshold-signed Kubernetes service account tokens.** kube-apiserver (v1.36+) delegates
 service account token signing to an external signer over its ExternalJWTSigner gRPC API
