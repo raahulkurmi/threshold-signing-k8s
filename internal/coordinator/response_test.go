@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -16,11 +17,38 @@ import (
 
 // signWithRogue signs with all 5 signers, signer 2 wrapped by rogue, and
 // returns the reason the coordinator recorded for signer 2.
+//
+// The coordinator stops collecting once 3 valid shares are in, so a rogue
+// reply that arrives after that is never recorded. Honest signers 4 and 5 hold
+// their sign-share reply until signer 2 has replied (plus a margin for the
+// coordinator to read it): the quorum then needs one of them, and signer 2's
+// reply is always evaluated first.
 func signWithRogue(t *testing.T, rogue func(h http.Handler) http.Handler) string {
 	t.Helper()
+	replied := make(chan struct{})
+	var once sync.Once
 	c := testutil.StartCluster(t, testutil.ClusterOpts{Wrap: func(id int, h http.Handler) http.Handler {
-		if id == 2 {
-			return rogue(h)
+		switch id {
+		case 2:
+			rh := rogue(h)
+			return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path == wire.SignSharePath {
+					defer once.Do(func() { close(replied) })
+				}
+				rh.ServeHTTP(w, r)
+			})
+		case 4, 5:
+			return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path == wire.SignSharePath {
+					select {
+					case <-replied:
+						time.Sleep(200 * time.Millisecond)
+					case <-r.Context().Done():
+						return
+					}
+				}
+				h.ServeHTTP(w, r)
+			})
 		}
 		return h
 	}})
