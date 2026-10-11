@@ -1,9 +1,9 @@
 # Phase 12 adversarial audit
 
-- **Audited commit:** `37f3c5e2de5e847817482bc0a5354e653338a8b2` (code freeze, NOTES N83), branch `fix/threshold-rsa`.
+- **Audited commit:** `6229ee8eb68557224c9ba33ed9f9588fc41c8e6e` (code freeze, NOTES N83), branch `fix/threshold-rsa`.
 - **Method:** fresh clones in a new directory, not the working tree. No AWS or other cloud resources were used.
 - **Date:** 2026-10-04.
-- **Instructions:** `docs/instructions/CLAUDE_CODE_PHASE12_AUDIT.md` (committed 0aac79c).
+- **Instructions:** `docs/instructions/CLAUDE_CODE_PHASE12_AUDIT.md` (committed 0785797).
 - **Status:** report only. Nothing in the main tree has been changed; fixes wait for approval.
 
 Companion files: [MUTATION.md](MUTATION.md), [FUZZ.md](FUZZ.md), [CLAIMS_RECHECK.md](CLAIMS_RECHECK.md),
@@ -55,18 +55,18 @@ The high findings are about **evidence and tests, not exploitable code**:
 
 ## Pass A: fresh reproduction
 
-- **Fresh runner:** `gh workflow run repro.yml --ref fix/threshold-rsa` gave run **37160608647**, on commit `0aac79c`. That commit differs from the freeze only in `NOTES.md` (N83) and the instructions file (`git diff --stat 37f3c5e 0aac79c`: 2 files, docs only).
+- **Fresh runner:** `gh workflow run repro.yml --ref fix/threshold-rsa` gave run **37160608647**, on commit `0785797`. That commit differs from the freeze only in `NOTES.md` (N83) and the instructions file (`git diff --stat 6229ee8 0785797`: 2 files, docs only).
   - Result: **Overall PASS, 735 s**, with no manual step.
   - Steps: install-base-packages, docker (pre-existing, detected), kind/kubectl/gitleaks/go with checksums, node image built from the official v1.36.5 tarball (sha256-verified), make-test 330 s, make-check-images 37 s, make-e2e 325 s.
   - e2e: SETUP, E1–E8, REQ-a–d, N1–N3, TIMING, N76-ID, N76-PRIO, all PASS. REQ-d shows `strategy=optimistic … quorum_abort=false`.
   - Artifact: `reports/repro/run-37160608647-0aac79c/` (REPRO.md, e2e.log, repro-logs/*.log).
-- **Local:** `make test` on a fresh clone of 37f3c5e (macOS): PASS in 2 min 30 s, no skips, gitleaks present (`raw/A-baseline-make-test-local.log`).
+- **Local:** `make test` on a fresh clone of 6229ee8 (macOS): PASS in 2 min 30 s, no skips, gitleaks present (`raw/A-baseline-make-test-local.log`).
 - **Numbers:** every results directory cited in README/THREAT_MODEL/reports regenerates its committed `summary.md` byte-for-byte from committed raw data with the repo's summarizer (Pass G, `raw/G-regen-results.txt`). Numbers that are not in any summary, or contradict one, are G-7, G-8, G-19, G-20, G-21, G-31.
 
 ### A-1: The committed reports/REPRO.md predates the final defaults
 - Severity: low
 - Location: reports/REPRO.md:3-62
-- Evidence: the committed file is for `aef95d5` (2026-09-25). Its REQ-d line reads `strategy=strict`, and it has no TIMING, N76-ID or N76-PRIO rows. This audit's run at 0aac79c shows `strategy=optimistic … quorum_abort=false` and 19 checks.
+- Evidence: the committed file is for `fc3a934` (2026-09-25). Its REQ-d line reads `strategy=strict`, and it has no TIMING, N76-ID or N76-PRIO rows. This audit's run at 0785797 shows `strategy=optimistic … quorum_abort=false` and 19 checks.
 - Why it matters: the reproduction evidence the paper points to does not describe the frozen system.
 - Suggested fix: replace REPRO.md with the run-37160608647 artifact (`reports/repro/run-37160608647-0aac79c/`), and commit its step logs (see G-1).
 
@@ -93,7 +93,7 @@ citations in code, tests and Dockerfiles. "Would fail" comes from the mutation r
 ### B-1: Invariants I1–I10 are cited everywhere but defined nowhere in the repository
 - Severity: medium
 - Location: docs/instructions/CLAUDE_CODE_ADDENDUM_make-it-solid.md:3 ("Read this after CLAUDE_CODE_PROMPT_frost-k8s-fix.md"); I-citations in test/*.go, cmd/*/main.go, deploy/docker/*, deploy/docker-compose.yml
-- Evidence: `git log --all --format=%h -- 'docs/instructions/*'` → 0aac79c, 78384e9 only. `git grep -n 'CLAUDE_CODE_PROMPT_frost-k8s-fix'` → only the addendum. No file states I1–I10.
+- Evidence: `git log --all --format=%h -- 'docs/instructions/*'` → 0785797, c7bfab2 only. `git grep -n 'CLAUDE_CODE_PROMPT_frost-k8s-fix'` → only the addendum. No file states I1–I10.
 - Why it matters: a reviewer cannot check "T1 (I1, I2)" or "I4" against a definition. The audit had to reconstruct them, so Pass B cannot be fully conclusive.
 - Suggested fix: commit the original prompt, or add a short `docs/INVARIANTS.md` that states I1–I10 and maps each to its tests (the table above).
 
@@ -125,7 +125,7 @@ Findings G-1…G-44 are summarised in one line each. Their full blocks (evidence
 #### G-3: NOTES N68 names a non-existent directory (`20260927T123218Z-7faa09c-7C`, the aborted attempt) as "the real run" — high
 #### G-4: The security-group log for 7C/N76/v2 is gitignored and never committed; INDEPENDENCE cites it — high
 #### G-5: README calls the signers "independent", which no tested deployment provides (README.md:6-7) — high
-#### G-6: The N60 "rule for operator network drops" was written after the L2 failure it was applied to (ebabdb1, 19:42Z, after the 19:33Z event) — high
+#### G-6: The N60 "rule for operator network drops" was written after the L2 failure it was applied to (d8ce146, 19:42Z, after the 19:33Z event) — high
 
 ### Medium
 
@@ -260,21 +260,21 @@ Findings G-1…G-44 are summarised in one line each. Their full blocks (evidence
 #### J-1: HISTORY_PURGE.md says gitleaks finds 4 history leaks; it finds 10
 - Severity: low
 - Location: reports/HISTORY_PURGE.md:30-33
-- Evidence: `gitleaks git . --log-opts=--all --redact` → `leaks found: 10`: 4 private keys (as listed) plus 6 `generic-api-key` hits in `reports/aws/7c/bootstrap-checks.jsonl` at a0173b4. Those 6 are the public `token_kid` values N69 renamed: false positives, but they will trip anyone who re-runs the scan. The `.summarize` commit id is also wrong (G-30). Manual history search found no further sensitive paths beyond the listed ones (`raw/HIJ-history-sensitive-paths.txt`), and no PEM, share, AKIA or Vault-token content in 1 GB of decompressed result archives (`raw/HIJ-gz-content-scan.txt`).
+- Evidence: `gitleaks git . --log-opts=--all --redact` → `leaks found: 10`: 4 private keys (as listed) plus 6 `generic-api-key` hits in `reports/aws/7c/bootstrap-checks.jsonl` at bcf4405. Those 6 are the public `token_kid` values N69 renamed: false positives, but they will trip anyone who re-runs the scan. The `.summarize` commit id is also wrong (G-30). Manual history search found no further sensitive paths beyond the listed ones (`raw/HIJ-history-sensitive-paths.txt`), and no PEM, share, AKIA or Vault-token content in 1 GB of decompressed result archives (`raw/HIJ-gz-content-scan.txt`).
 - Suggested fix: record the 6 false positives (commit, rule, reason) in HISTORY_PURGE.md, or add a `.gitleaksignore` with fingerprints.
 
 #### J-2: Absolute operator home paths in committed reports
 - Severity: low
 - Location: reports/aws/TEARDOWN-7C-20260927T194900Z.md, reports/aws/TEARDOWN-N76-20261003T154358Z.md, reports/aws/TEARDOWN-v2-20261003T214235Z.md, reports/ci/govulncheck.txt, plus the 7C-stress summary (G-34)
-- Evidence: `git grep -ln "/Users/" 37f3c5e`. None appear in code, deploy files, scripts or docs. There is no debug code, `TODO`/`FIXME`, or `fmt.Print` in cmd/ or internal/.
+- Evidence: `git grep -ln "/Users/" 6229ee8`. None appear in code, deploy files, scripts or docs. There is no debug code, `TODO`/`FIXME`, or `fmt.Print` in cmd/ or internal/.
 - Suggested fix: strip the `/Users/<name>/…` prefix.
 
 #### J-3: The author's employer name now appears in the repository, inside the Phase 12 instructions file itself
 - Severity: low
-- Location: docs/instructions/CLAUDE_CODE_PHASE12_AUDIT.md (Pass J bullet), commit 0aac79c (after the freeze)
+- Location: docs/instructions/CLAUDE_CODE_PHASE12_AUDIT.md (Pass J bullet), commit 0785797 (after the freeze)
 - Evidence:
-  - `git grep -i -c <employer-name> 37f3c5e` → nothing.
-  - `git log --all -i -S <employer-name> --oneline` → `0aac79c docs: add Phase 12 audit instructions`.
+  - `git grep -i -c <employer-name> 6229ee8` → nothing.
+  - `git log --all -i -S <employer-name> --oneline` → `0785797 docs: add Phase 12 audit instructions`.
   - Commit metadata contains no such domain: `git log --all --format='%ae%n%ce' | sed 's/.*@/@/' | sort | uniq -c` → gmail.com, github.com, users.noreply.github.com.
 - Why it matters: the frozen code passes. The branch tip fails its own rule, because the rule names the word.
 - Suggested fix: reword that bullet to name the term indirectly, for example "the employer's company name".
@@ -292,7 +292,7 @@ Findings G-1…G-44 are summarised in one line each. Their full blocks (evidence
 - G-29 KEY_CEREMONY points to non-existent NOTES rotation entries.
 - G-30 HISTORY_PURGE has the wrong commit for `.summarize`.
 - G-31 N59 ratio.
-- G-32 7C summary records commit 1e77bee, not 73be90f.
+- G-32 7C summary records commit 13237ba, not a1f2393.
 - G-33 run-time summaries replaced rather than kept.
 - G-34 operator home path in the 7C-stress summary.
 - G-35 Level 1 VM count wording.
@@ -318,7 +318,7 @@ Findings G-1…G-44 are summarised in one line each. Their full blocks (evidence
 - **I-2**: `benchmark/go.mod:55` has `replace frost-k8s-threshold-signing => ../`, a local module, which is intended. No other replace directives, no vendoring. tcrsa is pinned at exactly v0.0.5 with a comment (go.mod:7). Its v0.0.5 LICENSE is MIT, and upstream master's LICENSE references US patent 10735188 and Chile 2015003766, so NOTICE and README are accurate.
 - **G-36 … G-44**: see PASS_G_FINDINGS.md.
   - G-36: the N76/N82 test edits loosened no assertion.
-  - G-37: v2 pre-registration verified (293a919 precedes d07a8e7 and all v2 data). The abort default was decided on priority-admission data.
+  - G-37: v2 pre-registration verified (fe0d537 precedes 361421d and all v2 data). The abort default was decided on priority-admission data.
   - G-38: overload-control framing is correct.
   - G-39: one removed test is still cited historically.
   - G-40: the summarizer is not backward compatible with 7A.
@@ -368,7 +368,7 @@ Order: high first, then the medium items that change what a reader concludes, th
 | 1 | C-1 | Unit tests for `cmd/grpc-proxy` `load()` defaults (QUORUM_ABORT unset/on/off/invalid); optionally an e2e coordinator started without the variable | `make test`, re-run M17a |
 | 2 | C-2 | cmd/signer tests: multi-entry `SHARE_FILE`, a directory or a glob → fail closed; `settings` holds one share with index = SIGNER_ID | `make test`, re-run M10b |
 | 3 | G-1, A-1 | Commit the repro step logs (this audit's artifact under `reports/repro/run-37160608647-0aac79c/`, plus the CI artifact of run 36157069748 before it expires on 2026-12-24); replace REPRO.md with the run-37160608647 report | gitleaks + T11 |
-| 4 | G-2, G-18 | Restore per-session copies of `reports/aws/7c/*` from a0173b4/0ee7228 and 18ac3ac into session-named folders; fix INDEPENDENCE §7C, N68, N78 citations; record the binary-hash discrepancy as undetermined | doc-only; evidence-existence script |
+| 4 | G-2, G-18 | Restore per-session copies of `reports/aws/7c/*` from bcf4405/6d87aaa and 2b27f0c into session-named folders; fix INDEPENDENCE §7C, N68, N78 citations; record the binary-hash discrepancy as undetermined | doc-only; evidence-existence script |
 | 5 | G-3 | Fix N68's run pointer | doc-only |
 | 6 | G-4 | Commit the operator-side SG logs for 7C/N76/v2 (scan first), or mark the 7C network bullet "not evidenced" | gitleaks + T11 |
 | 7 | G-5, G-9, G-10, G-16 | Rewrite README opening, status box, evidence rows and the coordinator description; fix deploy/multihost/README | doc-only |
@@ -411,52 +411,52 @@ Every fix commit names its finding (N83 freeze rule), and NOTES N84 lists them.
 
 | ID | Sev | Status | Commit | Now covered by / evidence |
 |---|---|---|---|---|
-| C-1 | high | **FIXED** | 2572d08 | `TestQuorumAbortDefaultsOff`, `TestLoadDefaults` (cmd/grpc-proxy). **M17a re-run: CAUGHT** (was SURVIVED) |
-| C-2 | high | **FIXED** | fc4b8ce | `TestShareFileMustNameExactlyOneFile` (cmd/signer; behavioural + structural). **M10b re-run: CAUGHT** (was SURVIVED) |
-| G-1 | high | **FIXED** | 5a77718 | step logs of the 4 GitHub-runner repro runs in `reports/repro/run-<id>-<sha>/`; EC2 attempt logs and N56's failure text marked **not retained** (instance terminated) in `reports/aws/REPRO-*.md`, NOTES N84 |
-| G-2 | high | **FIXED** | 01272b2 | per-session evidence restored from git history: `reports/aws/7c-session1/` (a0173b4, 0ee7228), `n76-session/` (18ac3ac), `v2-session/` (a000c9b); `reports/aws/7c/README.md` maps the retired path; INDEPENDENCE and PAPER_INPUTS citations fixed. `provision-7c.sh` assigns `EVIDENCE_DIR=reports/aws/7c-sessions/<UTC>`, and `bootstrap.sh` and `deploy.sh` refuse to overwrite committed evidence |
-| G-3 | high | **FIXED** | d23d0f4 | correction entry NOTES N84 (N68 not rewritten) |
-| G-4 | high | **FIXED** | 01272b2 | the SG log **was recoverable** (operator-side `deploy/aws/state/sg-rules.txt`, 69 lines) and is committed per session as `sg-rules.txt`; its 2026-09-26 lines are byte-identical to the already committed `reports/aws/sg-rules.txt`; it confirms INDEPENDENCE §7C (8441 only from 15.252.57.131/32, the coordinator IP in the manifests) |
-| G-5 | high | **FIXED** | d23d0f4 | README opening no longer says "independent signers" |
-| G-6 | high | **FIXED** | d23d0f4 | disclosed in NOTES N84, REVIEW_RESPONSE R12, PAPER_INPUTS, INDEPENDENCE; the original FAIL is kept |
-| B-1 | med | **FIXED** (round 2) | fc69a58 | `docs/INVARIANTS.md` (each invariant: enforcing code, tests, mutation evidence); linked from README and THREAT_MODEL |
-| C-3 | med | **FIXED** (round 2) | cba14ca | M5a → `TestResponseSANCheckWithoutTLSPinning`, M14a → `TestCancelledRequestRefusedBeforeAdmission`, M14b → `TestCallerGoneDuringAdmissionComputesNoShare`: **all three now CAUGHT**. M3a: documented in code as unreachable defence in depth (endpoint ids unique, each endpoint launched once); still survives by construction; no code removed |
-| C-7 | med | **FIXED** | 9f85a8c | `make test` → `test-spike` (spike module, 8 tests incl. `TestLibraryHazards`, `TestTamperedShareRejected`); CI's test job runs `make test`; `make vet` and CI vet spike/ |
-| E-1 | med | **FIXED** | c82f653 | `internal/vaultclient` (no redirect off the configured scheme/host/port) used by keyshare, prioritykey and dealer; `TestNoCrossHostRedirect` (4 call paths × 2 targets), `TestSameOriginRedirectFollowed`. Negative control: with the fix reverted the redirect target received 8 requests carrying the token. **Round 2 (374a59d):** `VAULT_ADDR` must be `https://`; plain http only with `VAULT_DEV_ALLOW_HTTP=1` (`TestCheckAddr`, `TestSignerFailsClosed` cases, `TestVaultModeRequiresHTTPS`; negative control fails without the check) |
-| E-2 | med | **FIXED** | c4c267e | `deploy/multihost/topology-guard.sh` (≤ t−1 shares per host; Level 1 2+2+1 complies, so no exception is needed); `TestTopologyGuard` (9 topologies; negative control: 3 unsafe placements accepted without the rule); deploy.sh checks the dealer threshold after the ceremony |
-| E-3 | med | **FIXED** | d23d0f4 | README trust assumptions, THREAT_MODEL §4 and §7 table, PAPER_INPUTS §4.4 row |
-| I-1 | med | **FIXED** | d23d0f4 | `LICENSE` (Apache-2.0, canonical text sha256 cfc7749b…); NOTICE and README consistent with it and with tcrsa v0.0.5 MIT |
-| G-7 | med | **FIXED** (round 2) | 29868bd | CLAIMS_AUDIT row 11, REVIEW_RESPONSE R6, PAPER_INPUTS: 0.0 % median, 4 of 72,000 failed (summary.md:131, :153); NOTES N85 corrects N69 |
-| G-8 | med | **FIXED** (round 2) | 29868bd | PAPER_INPUTS, PRIORITY_ADMISSION §7: RSA ≈ 92–95 ms; throttled/wall 85–129 % (not a fraction); NOTES N85 |
-| G-9 | med | **FIXED** | d23d0f4 | README status box, evidence table, benchmark paragraph |
-| G-10 | med | **FIXED** | d23d0f4 | README "How it works" item 3 |
-| G-11 | med | **FIXED** (round 2) | 29868bd | THREAT_MODEL header, §1, §6 Level 2 row, C7 rate (7C plateau), N76 'evaluated' |
-| G-12 | med | **FIXED** (round 2) | 29868bd | THREAT_MODEL §0, §1, C4: per-replica `coordinator-<k>` |
-| G-13 | med | **FIXED** (round 2) | 29868bd | CLAIMS_AUDIT row 11 (N72 withdrawn, N78 result), row 14 (Level 2); NOTES N85 |
-| G-14 | med | **FIXED** (round 2) | 29868bd | 'bimodal' explanation withdrawn in CLAIMS_AUDIT, REVIEW_RESPONSE, PAPER_INPUTS: 36 ms warm average vs 70 ms with 2 signers killed |
-| G-15 | med | **FIXED** (round 2) | 29868bd | required framing in CA 9/10, R17, PAPER_INPUTS; #141673 and #141687 listed (status 2026-10-04) |
-| G-16 | med | **FIXED** | d23d0f4 | deploy/multihost/README (Level 2 done; netem delay labelled a knob) |
-| G-17 | med | **FIXED** | d23d0f4 | correction in NOTES N84 |
-| G-18 | med | **FIXED** | 01272b2, d23d0f4 | INDEPENDENCE §7C and NOTES N84: cause of the differing hashes not determined |
-| G-19 | med | **FIXED** (round 2) | 29868bd | `benchmark/derived.sh` → `derived.md` (7B coordinator CPU; lever hedge counts) from raw data; docs cite it |
+| C-1 | high | **FIXED** | a076db4 | `TestQuorumAbortDefaultsOff`, `TestLoadDefaults` (cmd/grpc-proxy). **M17a re-run: CAUGHT** (was SURVIVED) |
+| C-2 | high | **FIXED** | e5bfadb | `TestShareFileMustNameExactlyOneFile` (cmd/signer; behavioural + structural). **M10b re-run: CAUGHT** (was SURVIVED) |
+| G-1 | high | **FIXED** | 6c2d65c | step logs of the 4 GitHub-runner repro runs in `reports/repro/run-<id>-<sha>/`; EC2 attempt logs and N56's failure text marked **not retained** (instance terminated) in `reports/aws/REPRO-*.md`, NOTES N84 |
+| G-2 | high | **FIXED** | da84bfe | per-session evidence restored from git history: `reports/aws/7c-session1/` (bcf4405, 6d87aaa), `n76-session/` (2b27f0c), `v2-session/` (bec4906); `reports/aws/7c/README.md` maps the retired path; INDEPENDENCE and PAPER_INPUTS citations fixed. `provision-7c.sh` assigns `EVIDENCE_DIR=reports/aws/7c-sessions/<UTC>`, and `bootstrap.sh` and `deploy.sh` refuse to overwrite committed evidence |
+| G-3 | high | **FIXED** | 189e149 | correction entry NOTES N84 (N68 not rewritten) |
+| G-4 | high | **FIXED** | da84bfe | the SG log **was recoverable** (operator-side `deploy/aws/state/sg-rules.txt`, 69 lines) and is committed per session as `sg-rules.txt`; its 2026-09-26 lines are byte-identical to the already committed `reports/aws/sg-rules.txt`; it confirms INDEPENDENCE §7C (8441 only from 15.252.57.131/32, the coordinator IP in the manifests) |
+| G-5 | high | **FIXED** | 189e149 | README opening no longer says "independent signers" |
+| G-6 | high | **FIXED** | 189e149 | disclosed in NOTES N84, REVIEW_RESPONSE R12, PAPER_INPUTS, INDEPENDENCE; the original FAIL is kept |
+| B-1 | med | **FIXED** (round 2) | be06e77 | `docs/INVARIANTS.md` (each invariant: enforcing code, tests, mutation evidence); linked from README and THREAT_MODEL |
+| C-3 | med | **FIXED** (round 2) | 11139f2 | M5a → `TestResponseSANCheckWithoutTLSPinning`, M14a → `TestCancelledRequestRefusedBeforeAdmission`, M14b → `TestCallerGoneDuringAdmissionComputesNoShare`: **all three now CAUGHT**. M3a: documented in code as unreachable defence in depth (endpoint ids unique, each endpoint launched once); still survives by construction; no code removed |
+| C-7 | med | **FIXED** | 9359ce2 | `make test` → `test-spike` (spike module, 8 tests incl. `TestLibraryHazards`, `TestTamperedShareRejected`); CI's test job runs `make test`; `make vet` and CI vet spike/ |
+| E-1 | med | **FIXED** | 717069a | `internal/vaultclient` (no redirect off the configured scheme/host/port) used by keyshare, prioritykey and dealer; `TestNoCrossHostRedirect` (4 call paths × 2 targets), `TestSameOriginRedirectFollowed`. Negative control: with the fix reverted the redirect target received 8 requests carrying the token. **Round 2 (af6e093):** `VAULT_ADDR` must be `https://`; plain http only with `VAULT_DEV_ALLOW_HTTP=1` (`TestCheckAddr`, `TestSignerFailsClosed` cases, `TestVaultModeRequiresHTTPS`; negative control fails without the check) |
+| E-2 | med | **FIXED** | 1b89649 | `deploy/multihost/topology-guard.sh` (≤ t−1 shares per host; Level 1 2+2+1 complies, so no exception is needed); `TestTopologyGuard` (9 topologies; negative control: 3 unsafe placements accepted without the rule); deploy.sh checks the dealer threshold after the ceremony |
+| E-3 | med | **FIXED** | 189e149 | README trust assumptions, THREAT_MODEL §4 and §7 table, PAPER_INPUTS §4.4 row |
+| I-1 | med | **FIXED** | 189e149 | `LICENSE` (Apache-2.0, canonical text sha256 cfc7749b…); NOTICE and README consistent with it and with tcrsa v0.0.5 MIT |
+| G-7 | med | **FIXED** (round 2) | ded335a | CLAIMS_AUDIT row 11, REVIEW_RESPONSE R6, PAPER_INPUTS: 0.0 % median, 4 of 72,000 failed (summary.md:131, :153); NOTES N85 corrects N69 |
+| G-8 | med | **FIXED** (round 2) | ded335a | PAPER_INPUTS, PRIORITY_ADMISSION §7: RSA ≈ 92–95 ms; throttled/wall 85–129 % (not a fraction); NOTES N85 |
+| G-9 | med | **FIXED** | 189e149 | README status box, evidence table, benchmark paragraph |
+| G-10 | med | **FIXED** | 189e149 | README "How it works" item 3 |
+| G-11 | med | **FIXED** (round 2) | ded335a | THREAT_MODEL header, §1, §6 Level 2 row, C7 rate (7C plateau), N76 'evaluated' |
+| G-12 | med | **FIXED** (round 2) | ded335a | THREAT_MODEL §0, §1, C4: per-replica `coordinator-<k>` |
+| G-13 | med | **FIXED** (round 2) | ded335a | CLAIMS_AUDIT row 11 (N72 withdrawn, N78 result), row 14 (Level 2); NOTES N85 |
+| G-14 | med | **FIXED** (round 2) | ded335a | 'bimodal' explanation withdrawn in CLAIMS_AUDIT, REVIEW_RESPONSE, PAPER_INPUTS: 36 ms warm average vs 70 ms with 2 signers killed |
+| G-15 | med | **FIXED** (round 2) | ded335a | required framing in CA 9/10, R17, PAPER_INPUTS; #141673 and #141687 listed (status 2026-10-04) |
+| G-16 | med | **FIXED** | 189e149 | deploy/multihost/README (Level 2 done; netem delay labelled a knob) |
+| G-17 | med | **FIXED** | 189e149 | correction in NOTES N84 |
+| G-18 | med | **FIXED** | da84bfe, 189e149 | INDEPENDENCE §7C and NOTES N84: cause of the differing hashes not determined |
+| G-19 | med | **FIXED** (round 2) | ded335a | `benchmark/derived.sh` → `derived.md` (7B coordinator CPU; lever hedge counts) from raw data; docs cite it |
 | A-1 | low | **FIXED** | (final evidence commit) | `reports/REPRO.md` replaced by the repro run on the final code (see below) |
-| C-4 | low | **FIXED** (round 3) | 2da5330 | `TestResponseRequestIDMustMatch`; mutation **X4: SURVIVED → CAUGHT** |
-| C-5 | low | **FIXED** (round 3) | 2da5330 | `TestOversizedResponseRejected`; mutation **X5: SURVIVED → CAUGHT** |
-| C-6 | low | **FIXED** (round 3) | 330113d, 54b1882 | bounded waits; root cause was `holdSlot`'s `sync.Once` blocking every later request behind the parked holder. Mutation **M13a: caught by six assertions in 62 s** (was a 30-minute package timeout) |
-| C-8 | low | **FIXED** (round 3) | 046ef34 | `internal/policy/edges_test.go`; gremlins `internal/policy`: **92 killed, 0 lived, 0 not covered** (was 74/15/3) |
-| D-1 | low | **FIXED** (round 3) | 046ef34 | `policy.num` refuses a quoted NumericDate; `TestPolicyRejectsQuotedNumericDates` (fails without the fix). e2e confirmation for real tokens: see "Final CI and repro, round 3" (REQ-a, REQ-c, E3, E4) |
-| E-4 | low | **FIXED** (round 3) | e1f0bf4 | `dealer.PrepareOutputDir`, cleanup of partial shares; `TestPrepareOutputDir`, `TestWriteShareFilesCleansUpOnFailure`, `TestRefusesSharedWritableOutputDir` (negative controls fail) |
-| E-5 | low | **FIXED** (ControlPath) + **ACCEPTED** (TOFU) (round 3) | 5517030 | control sockets in `~/.ssh/tk8s-cm` (0700). Accepted: `StrictHostKeyChecking=accept-new`, because freshly launched VMs' host keys cannot be pinned without console access; the first key is recorded, later changes refused (reason in `transport.sh`) |
-| H-1 | low | **FIXED** (round 3) | 9c88b02 | base images pinned by multi-arch index digest in all 4 Dockerfiles |
+| C-4 | low | **FIXED** (round 3) | 90b9ab0 | `TestResponseRequestIDMustMatch`; mutation **X4: SURVIVED → CAUGHT** |
+| C-5 | low | **FIXED** (round 3) | 90b9ab0 | `TestOversizedResponseRejected`; mutation **X5: SURVIVED → CAUGHT** |
+| C-6 | low | **FIXED** (round 3) | 34db1b8, 670e060 | bounded waits; root cause was `holdSlot`'s `sync.Once` blocking every later request behind the parked holder. Mutation **M13a: caught by six assertions in 62 s** (was a 30-minute package timeout) |
+| C-8 | low | **FIXED** (round 3) | 9972e50 | `internal/policy/edges_test.go`; gremlins `internal/policy`: **92 killed, 0 lived, 0 not covered** (was 74/15/3) |
+| D-1 | low | **FIXED** (round 3) | 9972e50 | `policy.num` refuses a quoted NumericDate; `TestPolicyRejectsQuotedNumericDates` (fails without the fix). e2e confirmation for real tokens: see "Final CI and repro, round 3" (REQ-a, REQ-c, E3, E4) |
+| E-4 | low | **FIXED** (round 3) | 4688364 | `dealer.PrepareOutputDir`, cleanup of partial shares; `TestPrepareOutputDir`, `TestWriteShareFilesCleansUpOnFailure`, `TestRefusesSharedWritableOutputDir` (negative controls fail) |
+| E-5 | low | **FIXED** (ControlPath) + **ACCEPTED** (TOFU) (round 3) | ca4629e | control sockets in `~/.ssh/tk8s-cm` (0700). Accepted: `StrictHostKeyChecking=accept-new`, because freshly launched VMs' host keys cannot be pinned without console access; the first key is recorded, later changes refused (reason in `transport.sh`) |
+| H-1 | low | **FIXED** (round 3) | 0e6e709 | base images pinned by multi-arch index digest in all 4 Dockerfiles |
 | H-2 | low | **ACCEPTED** (round 3) | – | the 4 AWS scripts cannot be re-validated without cloud runs; adding `set -e` would change their failure behaviour untested |
-| H-3 | low | **FIXED** (round 2) | d26a5b5 | no released grpc fix (2026-10-04); acceptance extended to 2027-01-31 with justification; `scripts/govulncheck.sh` passes |
-| J-1 | low | **FIXED** (round 3) | 9867652 | `.gitleaksignore` (6 public-kid false positives by fingerprint); `gitleaks git --log-opts=--all` now reports exactly the 4 real burned keys; HISTORY_PURGE §1 corrected |
+| H-3 | low | **FIXED** (round 2) | cd699fa | no released grpc fix (2026-10-04); acceptance extended to 2027-01-31 with justification; `scripts/govulncheck.sh` passes |
+| J-1 | low | **FIXED** (round 3) | a422a0a | `.gitleaksignore` (6 public-kid false positives by fingerprint); `gitleaks git --log-opts=--all` now reports exactly the 4 real burned keys; HISTORY_PURGE §1 corrected |
 | J-2 | low | **ACCEPTED** (round 3) | – | the paths are inside verbatim evidence outputs; editing them would be a post-hoc change; the anonymized snapshot (HISTORY_PURGE §0a) strips them |
-| J-3 | low | **FIXED** (tree) | d23d0f4 | the name no longer appears in any tracked file, including these reports. It remains in the history of 0aac79c; removing it would need a history rewrite, which the audit rules forbid |
-| G-24, G-27, G-28 | low | **FIXED** (round 2, under the claims criterion) | 29868bd | THREAT_MODEL line ref; clock-skew provenance ('logs not retained'); CI e2e lines in `reports/gates/ci-e2e-run*.txt` |
-| G-20, G-21, G-22, G-31 | low | **FIXED** (round 3) | 19f678e | NOTES N87 corrections, each re-derived from the summaries / `git show c46daba` |
-| G-23, G-25, G-29, G-32, G-35 | low | **FIXED** (round 3) | 19f678e | PRIORITY_ADMISSION_V2 §7/§8; CLAIMS_AUDIT row 9; KEY_CEREMONY; 7C POSTPROCESSING.md (summary.md unchanged); THREAT_MODEL |
-| G-30 | low | **FIXED** (round 3) | 9867652 | HISTORY_PURGE: `.summarize` added 9bb1f16, removed 6ebb013 |
+| J-3 | low | **FIXED** (tree) | 189e149 | the name no longer appears in any tracked file, including these reports. It remains in the history of 0785797; removing it would need a history rewrite, which the audit rules forbid |
+| G-24, G-27, G-28 | low | **FIXED** (round 2, under the claims criterion) | ded335a | THREAT_MODEL line ref; clock-skew provenance ('logs not retained'); CI e2e lines in `reports/gates/ci-e2e-run*.txt` |
+| G-20, G-21, G-22, G-31 | low | **FIXED** (round 3) | 0a30f22 | NOTES N87 corrections, each re-derived from the summaries / `git show 2cf9ced` |
+| G-23, G-25, G-29, G-32, G-35 | low | **FIXED** (round 3) | 0a30f22 | PRIORITY_ADMISSION_V2 §7/§8; CLAIMS_AUDIT row 9; KEY_CEREMONY; 7C POSTPROCESSING.md (summary.md unchanged); THREAT_MODEL |
+| G-30 | low | **FIXED** (round 3) | a422a0a | HISTORY_PURGE: `.summarize` added 69dca2e, removed 902119a |
 | G-33 | low | **ACCEPTED** (round 3) | – | the run-time summaries cannot be recovered; the regenerated ones reproduce byte-for-byte from raw data (Pass G); rule for future runs: keep `summary.run-time.md` |
 | G-34 | low | **ACCEPTED** (round 3) | – | same as J-2: a verbatim script-generated summary; stripped in the anonymized snapshot |
 | G-26 | low | **FIXED** | (final evidence commit) | REPRO.md replaced |
@@ -469,7 +469,7 @@ build tag `auditfuzz`, so the product gate does not build audit tooling. Seeds:
 `go test -tags auditfuzz ./reports/audit/fuzz/` → ok.
 
 ### Gates re-run after the fixes
-- **Local, HEAD d23d0f4 + reports:** `make vet` (incl. spike), `make lint` (staticcheck, both tags) and `make test` (all packages, the new `cmd/grpc-proxy` and `internal/vaultclient` tests, T5, spike) → **PASS**.
+- **Local, HEAD 189e149 + reports:** `make vet` (incl. spike), `make lint` (staticcheck, both tags) and `make test` (all packages, the new `cmd/grpc-proxy` and `internal/vaultclient` tests, T5, spike) → **PASS**.
 - **Changed scripts:** shellcheck warning count unchanged from the freeze. `topology-guard.sh` is clean.
 - **Evidence commits:** gitleaks over the full tree and T11 → clean.
 - **Mutations:** M17a and M10b → **CAUGHT**, both at the fix commits and at the final code (MUTATION.md, "Re-runs after fixes").
@@ -483,27 +483,27 @@ build tag `auditfuzz`, so the product gate does not build audit tooling. Seeds:
 - **Fresh-clone repro:** see "Final CI and repro".
 
 ### Final CI and repro
-- **CI** run [37188818034](https://github.com/raahulkurmi/frost-k8s-threshold-signing/actions/runs/37188818034) on `5fdf63d`: **success**.
+- **CI** run [37188818034](https://github.com/raahulkurmi/frost-k8s-threshold-signing/actions/runs/37188818034) on `6e876dc`: **success**.
   - vet, staticcheck, govulncheck, gitleaks: success.
   - make test (T1–T12, T5 testmalicious, spike hazard tests): success.
   - images + kind e2e (Kubernetes v1.36.5): success.
-- **Fresh-clone repro** run [37188822909](https://github.com/raahulkurmi/frost-k8s-threshold-signing/actions/runs/37188822909) on `5fdf63d`: **Overall PASS, 841 s**.
+- **Fresh-clone repro** run [37188822909](https://github.com/raahulkurmi/frost-k8s-threshold-signing/actions/runs/37188822909) on `6e876dc`: **Overall PASS, 841 s**.
   - Steps: install-base-packages, docker, kind/kubectl/gitleaks/go, node image, make-test 572 s, make-check-images 38 s, make-e2e 179 s.
   - e2e: SETUP, E1–E8, REQ-a–d, N1–N3, TIMING, N76-ID, N76-PRIO all PASS; `REQ-d … quorum_abort=false (default, N82)`.
   - Its `make test` log shows `cmd/grpc-proxy`, `internal/vaultclient` and spike (`TestLibraryHazards`, `TestTamperedShareRejected`) passing.
   - Artifact: `reports/repro/run-37188822909-5fdf63d/`. `reports/REPRO.md` is now this run (A-1, G-26 fixed).
-- The commit after 5fdf63d changes only REPRO.md, the repro artifact and this section (documentation and evidence, no code). CI for it is recorded in the final report.
+- The commit after 6e876dc changes only REPRO.md, the repro artifact and this section (documentation and evidence, no code). CI for it is recorded in the final report.
 
 ---
 
 ## Round 2 (approved 2026-10-04): claims, invariants, C-3, H-3, E-1 extension, history
 
 Fixes are in the resolution table above (marked "round 2"). Commits:
-- 29868bd: claims G-7, G-8, G-11–G-15, G-19, plus G-24, G-27, G-28 (the same exit criterion);
-- cba14ca: C-3;
-- 374a59d: E-1 https;
-- fc69a58: B-1;
-- d26a5b5: H-3 and the history decision (`reports/HISTORY_PURGE.md` §0–§0a, README note; no history rewrite; snapshot plan, not created).
+- ded335a: claims G-7, G-8, G-11–G-15, G-19, plus G-24, G-27, G-28 (the same exit criterion);
+- 11139f2: C-3;
+- af6e093: E-1 https;
+- be06e77: B-1;
+- cd699fa: H-3 and the history decision (`reports/HISTORY_PURGE.md` §0–§0a, README note; no history rewrite; snapshot plan, not created).
 
 NOTES N85 and N86 record the corrections to earlier entries, which are not rewritten. The three aborted
 result folders stay untracked (G-44).
@@ -532,12 +532,12 @@ Evidence: `mutation/rerun/*-round2.*`.
 | G-20 | fix | NOTES correction entry: b-variant offered load is 2.4–3.9×, not 4–6×. |
 | G-21 | fix | NOTES correction entry: median refusals at c=10 are 126 (ab) and 36 (abs), worst run 277. |
 | G-22 | fix | NOTES correction entry: N56's bound is on the aggregate, not per token. |
-| G-23 | fix | Append "(applied in N82, 37f3c5e)" to PRIORITY_ADMISSION_V2 §7/§8. |
+| G-23 | fix | Append "(applied in N82, 6229ee8)" to PRIORITY_ADMISSION_V2 §7/§8. |
 | G-25 | fix | CLAIMS_AUDIT row 9: note that the `claims` comment is at lines 48–51 on master (file reformatted elsewhere by 693b7b3). |
 | G-29 | fix | KEY_CEREMONY: replace the dead NOTES pointer with "key rotation is not implemented; FetchKeys serves one key". |
-| G-30 | fix | HISTORY_PURGE: `.summarize` was added in 9bb1f16 and removed in 6ebb013. |
+| G-30 | fix | HISTORY_PURGE: `.summarize` was added in 69dca2e and removed in 902119a. |
 | G-31 | fix | NOTES correction entry: 7A scale-up ratio is 1.4–1.7×. |
-| G-32 | fix | Add a POSTPROCESSING note to the 7C results directory: token runs at 73be90f, summary regenerated at 1e77bee (summary.md not modified). |
+| G-32 | fix | Add a POSTPROCESSING note to the 7C results directory: token runs at a1f2393, summary regenerated at 13237ba (summary.md not modified). |
 | G-33 | accept | The run-time summaries cannot be recovered; both regenerated summaries reproduce byte-for-byte from raw data (verified in Pass G); adopt "keep summary.run-time.md" for future runs. |
 | G-34 | accept | Same as J-2: a verbatim script-generated summary; regenerating it would change committed evidence; stripped in the snapshot. |
 | G-35 | fix | THREAT_MODEL: "3 signer VMs plus the coordinator VM, all on one Mac". |
@@ -551,16 +551,16 @@ Evidence: `mutation/rerun/*-round2.*`.
 - **Fresh-clone repro:** see "Final CI and repro, round 2".
 
 ### Final CI and repro, round 2
-- **CI** run [37202622816](https://github.com/raahulkurmi/frost-k8s-threshold-signing/actions/runs/37202622816) on `7f10c65`: **success**.
+- **CI** run [37202622816](https://github.com/raahulkurmi/frost-k8s-threshold-signing/actions/runs/37202622816) on `4a6547d`: **success**.
   - vet, staticcheck, govulncheck, gitleaks: success (GO-2026-6443 accepted until 2027-01-31).
   - make test incl. T5 and spike: success.
   - images + kind e2e (v1.36.5): success.
-- **Fresh-clone repro** run [37202627639](https://github.com/raahulkurmi/frost-k8s-threshold-signing/actions/runs/37202627639) on `7f10c65`: **Overall PASS, 611 s**.
+- **Fresh-clone repro** run [37202627639](https://github.com/raahulkurmi/frost-k8s-threshold-signing/actions/runs/37202627639) on `4a6547d`: **Overall PASS, 611 s**.
   - Steps: make-test 369 s, make-check-images 31 s, make-e2e 161 s.
   - e2e: all **19** checks PASS (SETUP, E1–E8, REQ-a–d, N1–N3, TIMING, N76-ID, N76-PRIO).
   - Its `make test` log includes `internal/vaultclient`, `cmd/grpc-proxy` and spike.
   - Artifact: `reports/repro/run-37202627639-7f10c65/`. `reports/REPRO.md` is now this run.
-- **Correction:** earlier text in this report, and the round-1 commit f4e6a32's message, said "20" e2e checks. The suite has 19; the text above is corrected. A commit message cannot be changed without rewriting history.
+- **Correction:** earlier text in this report, and the round-1 commit df1c152's message, said "20" e2e checks. The suite has 19; the text above is corrected. A commit message cannot be changed without rewriting history.
 
 ---
 
@@ -587,7 +587,7 @@ NOTES N87 records the corrections to earlier entries.
 
 The only surviving manual mutation is M3a, an unreachable defence-in-depth check documented in the code.
 
-### Final CI and repro, round 3 (final code: `be4904a`)
+### Final CI and repro, round 3 (final code: `bb388f5`)
 - **CI** run [37225305132](https://github.com/raahulkurmi/frost-k8s-threshold-signing/actions/runs/37225305132): **success**.
   - vet, staticcheck, govulncheck, gitleaks: success.
   - make test incl. T5 and spike: success.

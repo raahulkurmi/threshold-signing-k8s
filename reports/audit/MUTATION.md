@@ -1,6 +1,6 @@
 # Pass C: mutation testing
 
-Freeze commit `37f3c5e`, fresh clones, macOS arm64, go1.27.1. Every mutation is an exact-literal source
+Freeze commit `6229ee8`, fresh clones, macOS arm64, go1.27.1. Every mutation is an exact-literal source
 edit (`mutation/mutations.sh`, `mutation/mutations2.sh`); the full gate was then run:
 
 ```
@@ -140,10 +140,10 @@ in-process; this is the same blind spot as M17a.
 Same script, same edits (`mutation/M17a.diff`, `mutation/M10b.diff`), full gate each time.
 Evidence: `mutation/rerun/<ID>-<run>.{summary,log.gz}`.
 
-| Mutation | Before (freeze 37f3c5e) | After the fix commit | At the final code (d23d0f4) | Caught by |
+| Mutation | Before (freeze 6229ee8) | After the fix commit | At the final code (189e149) | Caught by |
 |---|---|---|---|---|
-| M17a: QUORUM_ABORT binary default on (finding C-1) | SURVIVED | **CAUGHT** (fc4b8ce) | **CAUGHT** | `TestQuorumAbortDefaultsOff`, `TestLoadDefaults` (cmd/grpc-proxy, 2572d08) |
-| M10b: signer loads several `SHARE_FILE` entries (finding C-2) | SURVIVED | **CAUGHT** (fc4b8ce) | **CAUGHT** | `TestShareFileMustNameExactlyOneFile/{comma list, comma list 3}` (cmd/signer, fc4b8ce) |
+| M17a: QUORUM_ABORT binary default on (finding C-1) | SURVIVED | **CAUGHT** (e5bfadb) | **CAUGHT** | `TestQuorumAbortDefaultsOff`, `TestLoadDefaults` (cmd/grpc-proxy, a076db4) |
+| M10b: signer loads several `SHARE_FILE` entries (finding C-2) | SURVIVED | **CAUGHT** (e5bfadb) | **CAUGHT** | `TestShareFileMustNameExactlyOneFile/{comma list, comma list 3}` (cmd/signer, e5bfadb) |
 
 All 17 required mutations are now caught. Negative controls for the new tests:
 - E-1: with the fix reverted, `TestNoCrossHostRedirect` fails, because the redirect target received 8 requests carrying the token.

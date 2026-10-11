@@ -321,7 +321,7 @@ blocked for the full delay. Production signers decode the body immediately, so t
 production path was never affected.
 
 ### N31. e2e harness hang (run 2)
-In run 2 (commit `f077169`), SETUP, E1–E7 and REQ-a/b/c passed, then the script hung
+In run 2 (commit `cd9c4ef`), SETUP, E1–E7 and REQ-a/b/c passed, then the script hung
 at E8's rolling restart. A bare `wait` after `docker restart … &` also waits for the
 logging process substitution `exec > >(tee …)`, which never exits (bash ≥ 5.1
 behavior). This was a harness bug, not a system failure; the partial log is kept in
@@ -331,7 +331,7 @@ the VM as `~/e2e-run2-hung.out`. Fixed by waiting on the restart's own PID with 
 ### N32. T11 caught generated secrets left in the VM working tree
 The e2e run's teardown removed the cluster and containers but left `secrets/` (CA key,
 7 TLS keys, all 5 shares) in the VM's working tree. The files are gitignored, so they
-were never committable, but I10 requires a clean tree, and `make test` at `ab2de56`
+were never committable, but I10 requires a clean tree, and `make test` at `38cc4a1`
 failed T11 `TestNoSecretsInTree` (7 `private-key` findings). **gitleaks flagged the PEM
 keys but not the five `share-<i>.json` files** (bare base64 has no rule). Fixes:
 `run.sh` wipes `secrets/`, `run/` and `audit/` in an EXIT trap (audit logs are copied into
@@ -343,11 +343,11 @@ ignored directories and catches share files regardless of gitleaks.
 
 | Run | Commit | Outcome |
 |---|---|---|
-| 1 | `2e05943` | **Failed closed at `kind create`.** The guarded kubeadm patch's `test` op found an unexpected flag at index 24 (N28). No cluster was created. Log: `reports/gates/gate6-e2e-run1-2e05943-patch-guard-failed-closed.log` |
-| 2 | `f077169` | SETUP, E1–E7, REQ-a/b/c PASS; **harness hung** at E8 (bare `wait`, N31). Log: `…run2-f077169-harness-hang.log` |
-| 3 | `2f2d7bc` | SETUP, E1–E8, REQ-a/b/c PASS; **harness crashed** at REQ-d (`jq` on prefixed compose logs). Log: `…run3-2f2d7bc-harness-crash.log` |
-| 4 | `ab2de56` | **E2E: PASS** (all 13 checks). A later `make test` failed T11 because `secrets/` outlived the run (N32). Log: `…run4-ab2de56.log` |
-| 5 (Gate 6) | **`152941b`** | **E2E: PASS** (13/13), then **`make test` PASS** on the post-e2e tree, then **`make check-images` PASS**. Logs: `reports/gates/gate6-final-152941b.log`, `gate6-e2e-final-152941b.log`, `gate6-test-suite-T1-T12-152941b.log` |
+| 1 | `b5450e1` | **Failed closed at `kind create`.** The guarded kubeadm patch's `test` op found an unexpected flag at index 24 (N28). No cluster was created. Log: `reports/gates/gate6-e2e-run1-2e05943-patch-guard-failed-closed.log` |
+| 2 | `cd9c4ef` | SETUP, E1–E7, REQ-a/b/c PASS; **harness hung** at E8 (bare `wait`, N31). Log: `…run2-f077169-harness-hang.log` |
+| 3 | `4ac126d` | SETUP, E1–E8, REQ-a/b/c PASS; **harness crashed** at REQ-d (`jq` on prefixed compose logs). Log: `…run3-2f2d7bc-harness-crash.log` |
+| 4 | `38cc4a1` | **E2E: PASS** (all 13 checks). A later `make test` failed T11 because `secrets/` outlived the run (N32). Log: `…run4-ab2de56.log` |
+| 5 (Gate 6) | **`89d73e8`** | **E2E: PASS** (13/13), then **`make test` PASS** on the post-e2e tree, then **`make check-images` PASS**. Logs: `reports/gates/gate6-final-152941b.log`, `gate6-e2e-final-152941b.log`, `gate6-test-suite-T1-T12-152941b.log` |
 
 Observations from the passing runs:
 - **REQ-a:** the kubelet-projected token (pod `e3-client` on `tk8s-worker`) has
@@ -369,7 +369,7 @@ Observations from the passing runs:
   signers.
 - **E6 log line:** the harness grepped for `threshold not met`, which appears only in the
   returned error (shown in full in kubectl's output), not in the coordinator's log line
-  (`"msg":"sign failed"`). The grep is fixed in `152941b`.
+  (`"msg":"sign failed"`). The grep is fixed in `89d73e8`.
 - **Not done:** the optional v1.37.x re-run (the prompt says "at the very end"). The
   apiserver path deleted `sa.key` and nothing broke, but that is not a formal test.
 
@@ -418,7 +418,7 @@ override is needed, and the default compose file contains no test services.
 The first Phase 6.5 e2e run passed N1–N3, but N2's output showed
 `run/signer.sock` as `root:root 666`: any local user on the VM could call Sign.
 - **The first fix was wrong:** starting nginx with `umask 077`. The Gate 6.5 attempt at
-  `b2179f0` **failed N2**: `UNEXPECTED: non-root user ubuntu called FetchKeys on the
+  `528a62f` **failed N2**: `UNEXPECTED: non-root user ubuntu called FetchKeys on the
   socket`, mode still `666`. The cause is in nginx 1.29.8 `src/core/ngx_connection.c:662-664`,
   which always `chmod`s a unix listening socket to
   `S_IRUSR|S_IWUSR|S_IRGRP|S_IWGRP|S_IROTH|S_IWOTH`, so no umask can restrict it.
@@ -434,9 +434,9 @@ published port. Both were included in N2's connect attempts and refused.
 ### N37. Phase 6.5 run history
 | Run | Commit | Outcome |
 |---|---|---|
-| 1 | `c8abdf3` | **E2E: PASS** (SETUP, E1–E8, REQ-a–d, N1–N3). Review of N2's output found the socket at `666` (N36) |
-| 2 (attempt) | `b2179f0` | **E2E: FAIL, N2**: `UNEXPECTED: non-root user ubuntu called FetchKeys`. The umask fix doesn't work, because nginx forces 0666 (N36). The run was stopped during `make test` (exit 143 = my SIGTERM). Log: `reports/gates/gate6.5-attempt1-b2179f0-N2-fail.log` |
-| 3 (Gate 6.5) | **`468cd1c`** | **E2E: PASS** (19/19 checks), then **`make test` PASS**, then **`make check-images` PASS**. Logs: `reports/gates/gate6.5-final-468cd1c.log`, `gate6.5-e2e-final-468cd1c.log` |
+| 1 | `bc399d5` | **E2E: PASS** (SETUP, E1–E8, REQ-a–d, N1–N3). Review of N2's output found the socket at `666` (N36) |
+| 2 (attempt) | `528a62f` | **E2E: FAIL, N2**: `UNEXPECTED: non-root user ubuntu called FetchKeys`. The umask fix doesn't work, because nginx forces 0666 (N36). The run was stopped during `make test` (exit 143 = my SIGTERM). Log: `reports/gates/gate6.5-attempt1-b2179f0-N2-fail.log` |
+| 3 (Gate 6.5) | **`309a031`** | **E2E: PASS** (19/19 checks), then **`make test` PASS**, then **`make check-images` PASS**. Logs: `reports/gates/gate6.5-final-468cd1c.log`, `gate6.5-e2e-final-468cd1c.log` |
 
 In N1 the probe on `lb-net` connected from `172.30.1.1`. With `inhibit_ipv4` the host
 holds no gateway address, so Docker IPAM assigns `.1` to a container. That's another
@@ -463,12 +463,12 @@ BuildKit cache snapshots. It isn't key material, but **L4 was right to fail**: a
 shaped like a share on the coordinator host is a finding. Fix: `docker builder prune -af`
 after negative-control builds (now in the T13 negative-control procedure), and a full
 re-run of the multihost e2e.
-- Binary sha256 differs per commit (e.g. 34a2… at f39dd68, 3fd0… at 90a01bb) because Go stamps vcs.revision into the build; within a run L5 checks every host carries the identical, just-built binary.
+- Binary sha256 differs per commit (e.g. 34a2… at 6bc0c7c, 3fd0… at 1f5163d) because Go stamps vcs.revision into the build; within a run L5 checks every host carries the identical, just-built binary.
 
 ### N40. kind node image deleted by my own cleanup; rebuilt
 While cleaning up N39 I also ran `docker image prune -af` on tk8s. That removed every
 unused image, including the locally built `kindest/node:v1.36.5-tk8s` (N26), which exists
-nowhere else. Multihost e2e run 3 at `4432322` then failed at `kind create` (`failed to
+nowhere else. Multihost e2e run 3 at `d29675c` then failed at `kind create` (`failed to
 pull image`). All five L-tests had passed before that. The image was rebuilt from the same
 official v1.36.5 release binaries (`kind build node-image --type release v1.36.5`, 158 s):
 new image ID **`sha256:531890316ebb0d1ac5d655bbf3f78421f3c83a9d6cc86d8fbfca7781ab9c41d7`**
@@ -500,7 +500,7 @@ Minimal reproduction with multipass 1.16.4 on macOS:
 The client hangs when its stdout or stderr is `/dev/null` **and the remote command writes
 output**. N38's case was not about `sudo`: the permission-denied message went to
 `/dev/null`. The benchmark's `kubectl get --raw /readyz >/dev/null` hung the same way.
-Probes that write nothing (L1/L2 TCP checks) never triggered it, so the `45dfe68`
+Probes that write nothing (L1/L2 TCP checks) never triggered it, so the `1b1dfaf`
 multihost e2e evidence is unaffected, and N38's `rc_on` already covered L3. Fix, in
 every operator-side script (`deploy.sh`, `teardown.sh`, `test/e2e/multihost.sh`,
 `benchmark/multihost/run.sh`): the `on` helper always gives multipass pipes
@@ -692,7 +692,7 @@ fanout all then hedged, scored against N49) is **not run locally** and moves to 
 with the full matrix. N48 is covered by unit/integration tests only until then.
 The signer VMs sig-a/b/c are stopped (not deleted) to free host memory; tk8s stays up
 for single-host e2e runs.
-- Single-host `make e2e` at `aa223ca` on tk8s with **6 GiB** (N48 signers): **E2E: PASS**, all 17
+- Single-host `make e2e` at `8131111` on tk8s with **6 GiB** (N48 signers): **E2E: PASS**, all 17
   checks. kind + nginx + 3 coordinators + 5 signers fit in 6 GiB
   (`reports/gates/e2e-single-host-6GiB-aa223ca.log`).
 
@@ -751,7 +751,7 @@ generated per run (`secrets/b1/key.pem`, 0600) and wiped at exit with all other 
    but resume). So retrying kind was not a fix. `scripts/repro.sh` now fetches the tarball
    with resumable HTTP/1.1 range requests, **verifies it against the official `.sha256`**
    from dl.k8s.io, and runs `kind build node-image --type file`. Same official artifact,
-   now with an explicit checksum. EC2 attempt 2 (`c46daba`, same instance) failed only on
+   now with an explicit checksum. EC2 attempt 2 (`2cf9ced`, same instance) failed only on
    this step and the e2e that needs the image; make test (with the N56 fix) and
    make check-images passed.
 
@@ -977,7 +977,7 @@ unit tests with a fake clock (`TestBreakerSuspectCooldown`, `TestBreakerFallback
 (`reports/gates/overload-fix-make-test-local-bfab4d9.log`). A local kind run was not
 possible: free swap on the Mac was 730 MB, below the 2 GB floor for kind runs, so tk8s was
 not started. **Decision (2026-09-27): CI run 36275189321 is accepted as the kind
-validation, including `make check-images`** (all jobs green at `bfab4d9`; e2e 18/18 PASS
+validation, including `make check-images`** (all jobs green at `5478525`; e2e 18/18 PASS
 with strategy=optimistic, TIMING 71/72 joined:
 `reports/gates/overload-fix-ci-e2e-run36275189321-bfab4d9.log`). The under-load timing
 breakdown (c=1/10/50) moves to Phase 7C.
@@ -1074,7 +1074,7 @@ the same 1-worker cluster; token benchmarks may be reused if the worker count is
 
 ### N69. Phase 7C token benchmark: results and observations
 Run `benchmark/results/20260927T131349Z-73be90f-7C`: 3 runs × 6 systems × c=1/10/20/50,
-N=1000 after 100 warm-up, fan-out all, commit 73be90f. 72 configurations, **0 INVALID**,
+N=1000 after 100 warm-up, fan-out all, commit a1f2393. 72 configurations, **0 INVALID**,
 18 system switches all verified (kid, mode, TokenReview; 110–363 s each). An earlier
 attempt (`…20260927T123218Z-7faa09c-7C-ABORTED-switch-alarm`, not committed and not used)
 stopped mid-switch after B0/B1 of run 1, when the 600 s per-call ssh alarm cut a switch
@@ -1107,7 +1107,7 @@ short. Switches now get 25 min and one retry.
 - gitleaks flagged the field name `token_kid` (public key IDs); renamed to
   `jwt_header_kid` in `check.sh` and, as a documented mechanical change, in three result
   files (`POSTPROCESSING.md`). Raw JSONL logs are gzipped (summary identical).
-- **CI was red from a0173b4 to 73be90f** (3 CI runs): the gitleaks tree scan (and T11)
+- **CI was red from bcf4405 to a1f2393** (3 CI runs): the gitleaks tree scan (and T11)
   flagged `token_kid` in the committed `reports/aws/7c/bootstrap-checks.jsonl`. The
   pre-commit scan's output was lost because it ran in the same command as a
   backgrounded smoke run, and CI was not checked after those commits. Fixed by the same
@@ -1388,8 +1388,8 @@ AWS yet.
   from `cmd/signer` tests (the insertion had silently failed); it is now present.
 
 ### N78. N76/N77 AWS evaluation: results against the pre-registered rules (2026-10-03)
-Fresh 7C cluster (15 instances, Free Plan types, 09:22–15:37Z), commit 18ac3ac (code
-f745ae2). T-5 kid `9gu_VGBe…`, T-same kid `Eu4bZ_v5…`; all 10 signer hosts run binary
+Fresh 7C cluster (15 instances, Free Plan types, 09:22–15:37Z), commit 2b27f0c (code
+29e2025). T-5 kid `9gu_VGBe…`, T-same kid `Eu4bZ_v5…`; all 10 signer hosts run binary
 `f07f701f…`, one share each; 6 systems smoke-checked (`reports/aws/7c/bootstrap-checks.jsonl`).
 0 INVALID in all four phases. Teardown: zero tagged resources and zero any-tag instances,
 volumes and EIPs in 5 regions (`reports/aws/TEARDOWN-N76-20261003T154358Z.md`); the first
@@ -1516,8 +1516,8 @@ results are reported as is under the label **v2**; N76/N77/N78 results stay unch
   comes from the no-regression summary.
 
 ### N81. v2 AWS evaluation: results against the pre-registered rules (2026-10-03)
-The single follow-up iteration, label **v2**; rules fixed in 293a919 before any v2 code or
-data; v2 code d07a8e7 (CI 37139624877 green before launch). Fresh 7C cluster (15
+The single follow-up iteration, label **v2**; rules fixed in fe0d537 before any v2 code or
+data; v2 code 361421d (CI 37139624877 green before launch). Fresh 7C cluster (15
 instances, 17:19–21:44Z). T-5 kid `g1TN11q0…`, T-same kid `XQC677lh…`; signer binary
 `eb324efc…` on all 10 hosts; 6 systems smoke-checked; 0 INVALID. Results:
 `benchmark/results/20261003T174726Z-a000c9b-v2-stress-storm` and
@@ -1596,7 +1596,7 @@ instances, volumes and EIPs in 5 regions (`reports/aws/TEARDOWN-v2-20261003T2142
   hysteresis; and the CPU plateau with the N73 CPU-drop explanation.
 
 ### N83. Code freeze
-**Freeze commit: `37f3c5e2de5e847817482bc0a5354e653338a8b2`** (N82: final defaults), CI run
+**Freeze commit: `6229ee8eb68557224c9ba33ed9f9588fc41c8e6e`** (N82: final defaults), CI run
 37158258500 green (make test incl. T5, vet/staticcheck/govulncheck/gitleaks, images + kind
 e2e).
 - **From this commit on, only Phase 12 audit fixes are allowed.** No new features and no
@@ -1622,18 +1622,18 @@ entries below are **not rewritten**; these corrections apply to them.
   scale-up run actually used is `benchmark/results/20260927T131349Z-73be90f-7C`.
 - **Disclosure for N60 (audit G-6).** N60 says L2 was re-run "per the rule for operator network
   drops". **No such rule existed before the drop.**
-  - The drop happened at about 19:33Z on 2026-09-26. The last commit before it (b2f63ca,
+  - The drop happened at about 19:33Z on 2026-09-26. The last commit before it (5face06,
     19:08:35Z) contains no re-run rule.
   - The rule, and the `--recheck-l2` code the re-run used, were written after the FAIL
-    (ebabdb1, 19:42:09Z). The re-run started 2 s later.
+    (d8ce146, 19:42:09Z). The re-run started 2 s later.
   - The original FAIL stands and is kept (`reports/multihost/e2e-20260926T191044Z-b2f63ca/`).
   - During the drop, the blocked-path checks passed vacuously, so the only L2 evidence for
     Level 2 is that single re-run.
 - **Correction to N73 (audit G-17).** N73 says the ≈ 13.4/s prediction was "written down before
   the first stress configuration finished". It was recorded in the working session, but it
-  first appears in git in 88473b0 (19:53:26Z), after the stress data commit (a436567,
+  first appears in git in c0030fc (19:53:26Z), after the stress data commit (4e95881,
   19:40:31Z). The repository cannot show that it preceded the data. The N70 decision rule
-  itself is committed before the run (07bf7d8).
+  itself is committed before the run (a16b340).
 - **Correction to N68 (audit G-18).** Both 7C manifests record commit `02ae373`, so "built at
   different commits" does not explain the two signer binary hashes (`0dd3fa23…`,
   `1f744909…`). The cause was not determined; an uncommitted change in the operator tree is
@@ -1721,7 +1721,7 @@ carry the corrected text.
 - **E-1 (extension):** `VAULT_ADDR` must be `https://`; plain http is allowed only with
   `VAULT_DEV_ALLOW_HTTP=1`.
 - **History:** not rewritten. The reason, the disclosure (burned FROST-prototype keys; the
-  employer name in audit-instructions commit 0aac79c) and the plan for an anonymized,
+  employer name in audit-instructions commit 0785797) and the plan for an anonymized,
   history-free snapshot for double-blind review are in `reports/HISTORY_PURGE.md` §0–§0a, with a
   short note in README.
 - **G-44:** the three aborted, untracked result folders stay untracked by decision.
@@ -1734,7 +1734,7 @@ Earlier entries are not rewritten; these corrections apply to them.
   run. Per run: ab 126/28/166 (median **126**); abs 0/277/36 (median **36**, worst run 277).
 - **N56 (G-22).** The changed assertion bounds the **aggregate** server-side count, not each
   token. `total` is between 3 and 4 × requests (hedged) and `all` between 3 and 5 × requests;
-  `Result.Contacted` is exact per token (`git show c46daba`).
+  `Result.Contacted` is exact per token (`git show 2cf9ced`).
 - **N59 (G-31).** T strict-all became Ready **1.4–1.7×** later than B0, not 1.5–1.7×: 26.3/15.7 =
   1.68 at 50 pods, 57.2/39.6 = 1.44 at 100 pods (7A `summary.md:148-153`).
 
@@ -1754,7 +1754,7 @@ Earlier entries are not rewritten; these corrections apply to them.
 
 ### N88. Phase 12 audit complete
 The Phase 12 adversarial audit and its three approved fix rounds are complete.
-- **Final verified commit: `be4904a`.** On it, CI run 37225305132 passed every job: vet,
+- **Final verified commit: `bb388f5`.** On it, CI run 37225305132 passed every job: vet,
   staticcheck, govulncheck, gitleaks, `make test` with T5 and the spike hazard tests, the image
   check and the kind e2e on Kubernetes v1.36.5. The fresh-runner repro, run 37225310844, passed
   in 817 s, with all 19 e2e checks green (`reports/REPRO.md`).

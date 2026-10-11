@@ -1,7 +1,7 @@
 # Pass G: claims audit (docs vs reality) — findings
 
 Auditor: fresh session, did not write the code. Repo copy: `clone-G`, detached at freeze
-`37f3c5e2de5e847817482bc0a5354e653338a8b2`. No tracked file was modified (`git status --short`
+`6229ee8eb68557224c9ba33ed9f9588fc41c8e6e`. No tracked file was modified (`git status --short`
 empty after all runs). No cloud resource touched. `gh` used read-only (run view/list,
 public kubernetes/kubernetes issues/PRs/contents). Raw evidence under `out/raw/G-*.txt`.
 
@@ -10,13 +10,13 @@ Summary counts: critical 0, high 6, medium 13, low 16, info 9 (44 findings).
 What held up (verified, not findings): every cited results directory regenerates its
 committed `summary.md` byte-for-byte with the repo's own summarizer (7C, lever, 7C-stress,
 N76 slots/noregress/stress/storm, v2 stress-storm, v2 noregress with HEAD summarizer; 7A
-with summarizer@c76eee9; 7B with summarizer@45ff8fb and HEAD; L1 post-fix with
-summarizer@713776d) apart from the source-path list (`out/raw/G-regen-results.txt`);
-v2 rules R1–R5 and the §7 QUORUM_ABORT rule are byte-identical between 293a919 and the
-freeze, 293a919 is an ancestor of d07a8e7/a000c9b/eccc5a8 and predates the v2 cluster
+with summarizer@cc1ba0e; 7B with summarizer@1995319 and HEAD; L1 post-fix with
+summarizer@89f9456) apart from the source-path list (`out/raw/G-regen-results.txt`);
+v2 rules R1–R5 and the §7 QUORUM_ABORT rule are byte-identical between fe0d537 and the
+freeze, fe0d537 is an ancestor of 361421d/a000c9b/6aff30f and predates the v2 cluster
 (17:19Z) and data (17:47Z) (`G-v2-prereg.txt`, `G-v2-doc-diff.txt`); PRIORITY_ADMISSION.md
-§5 is byte-identical at b672ab7 (pre-data), 4c8823a (data) and the freeze
-(`G-prio-v1-prereg.txt`); the N70 stress rule (07bf7d8, 15:32Z) predates the stress run
+§5 is byte-identical at 10a49d9 (pre-data), 32474d0 (data) and the freeze
+(`G-prio-v1-prereg.txt`); the N70 stress rule (a16b340, 15:32Z) predates the stress run
 (19:17Z); N76 and N82 test edits change only constructor/config lines, no assertion
 (`G-n76-test-diff.txt`, `G-n82-test-diff.txt`); all six cited CI runs exist and are
 `success` on the stated SHAs (`G-ci-runs.txt`); all legacy file:line quotes in
@@ -44,14 +44,14 @@ the markdown exists; upstream issue/PR states match as of 2026-10-04 (`G-upstrea
 - Location: reports/INDEPENDENCE.md:163-182; NOTES.md:1065-1071 (N68), NOTES.md:1393 (N78); reports/PAPER_INPUTS.md:45
 - Evidence (`out/raw/G-7c-manifest-overwrite.txt`):
   ```
-  a0173b4 t5:    commit=02ae373 kid=EV_rkpqm binary=0dd3fa23    <- what INDEPENDENCE §7C / N68 describe
-  a0173b4 tsame: commit=02ae373 kid=wvQG_NBR binary=1f744909
-  18ac3ac t5/tsame: commit=f745ae2 kid=9gu_VGBe / Eu4bZ_v5 binary=f07f701f   <- what N78 describes
-  a000c9b t5/tsame: commit=d07a8e7 kid=g1TN11q0 / XQC677lh binary=eb324efc   <- what is in the tree at 37f3c5e
+  bcf4405 t5:    commit=02ae373 kid=EV_rkpqm binary=0dd3fa23    <- what INDEPENDENCE §7C / N68 describe
+  bcf4405 tsame: commit=02ae373 kid=wvQG_NBR binary=1f744909
+  2b27f0c t5/tsame: commit=f745ae2 kid=9gu_VGBe / Eu4bZ_v5 binary=f07f701f   <- what N78 describes
+  bec4906 t5/tsame: commit=d07a8e7 kid=g1TN11q0 / XQC677lh binary=eb324efc   <- what is in the tree at 6229ee8
   $ jq -r '[.system,.jwt_header_kid[0:8]]|@tsv' reports/aws/7c/bootstrap-checks.jsonl  -> 5XNTs7NT, NaAGGKX4, g1TN11q0, XQC677lh (v2 session)
   ```
 - Why it matters: INDEPENDENCE.md says its Phase 7C section is "written by hand from the files listed", but those files now describe a different cluster (v2, 2026-10-03). A reader checking the cited files finds contradicting kids, commits and binary hashes. The 7C and N76 provenance survives only in git history.
-- Suggested fix: keep per-session copies (`reports/aws/7c/`, `reports/aws/n76/`, `reports/aws/v2/`) restored from a0173b4/0ee7228 and 18ac3ac, and update every citation to the session-specific path.
+- Suggested fix: keep per-session copies (`reports/aws/7c/`, `reports/aws/n76/`, `reports/aws/v2/`) restored from bcf4405/6d87aaa and 2b27f0c, and update every citation to the session-specific path.
 
 ### G-3: NOTES N68 names a non-existent directory as "the real run"
 - Severity: high
@@ -59,7 +59,7 @@ the markdown exists; upstream issue/PR states match as of 2026-10-04 (`G-upstrea
 - Evidence:
   ```
   NOTES.md:1073 "...the real run is `benchmark/results/20260927T123218Z-7faa09c-7C`."
-  $ git cat-file -e 37f3c5e:benchmark/results/20260927T123218Z-7faa09c-7C  -> fatal (missing)
+  $ git cat-file -e 6229ee8:benchmark/results/20260927T123218Z-7faa09c-7C  -> fatal (missing)
   NOTES.md:1079 (N69): "An earlier attempt (`…20260927T123218Z-7faa09c-7C-ABORTED-switch-alarm`, not committed and not used)"
   ```
 - Why it matters: the pointer names the aborted, uncommitted attempt. The run actually used is `20260927T131349Z-73be90f-7C`. This is the "33 cited logs never committed" pattern again.
@@ -76,7 +76,7 @@ the markdown exists; upstream issue/PR states match as of 2026-10-04 (`G-upstrea
   $ grep -c 2026-09-27 reports/aws/sg-rules.txt       -> 0 ; grep -c 2026-10-03 -> 0
   ```
 - Why it matters: the network-isolation claims for T-5-region/T-same-region (port 8441 only from coordinator /32, coordinator ports only from control plane) have no committed evidence. "Rules quoted below" is prose, not a quotation of rules. L1–L5 were not re-run in 7C (INDEPENDENCE.md:189-193), so these SG rules are the only isolation evidence for 7C.
-- Suggested fix: commit the operator-side SG log for each session (as was done for 7B in 3f345b7), or downgrade the 7C network bullet to "not evidenced in the repository".
+- Suggested fix: commit the operator-side SG log for each session (as was done for 7B in ebd02e0), or downgrade the 7C network bullet to "not evidenced in the repository".
 
 ### G-5: README calls the signers "independent", which no tested deployment provides
 - Severity: high (wording that misstates a security property)
@@ -90,14 +90,14 @@ the markdown exists; upstream issue/PR states match as of 2026-10-04 (`G-upstrea
 - Location: NOTES.md:820-823 (N60 "Per the rule for operator network drops, L2 was re-run once"); reports/INDEPENDENCE.md:134; reports/REVIEW_RESPONSE.md:28
 - Evidence (`out/raw/G-n60-timing.txt`):
   ```
-  event: 2026-09-26 ~19:33Z; last commit before it: b2f63ca 2026-09-26T19:08:35Z
-  $ git grep -n -i 'network drop\|operator drop\|re-run once' b2f63ca -- .   -> (none)
-  first appearance: ebabdb1 2026-09-26T19:42:09Z ("L2 invalid: operator network drop", adds --recheck-l2)
-  L2 recheck dir: l2-recheck-20260926T194211Z-ebabdb1 (2 s after that commit); N60 text: 0d1aaaf 19:49:41Z
+  event: 2026-09-26 ~19:33Z; last commit before it: 5face06 2026-09-26T19:08:35Z
+  $ git grep -n -i 'network drop\|operator drop\|re-run once' 5face06 -- .   -> (none)
+  first appearance: d8ce146 2026-09-26T19:42:09Z ("L2 invalid: operator network drop", adds --recheck-l2)
+  L2 recheck dir: l2-recheck-20260926T194211Z-ebabdb1 (2 s after that commit); N60 text: 34b785c 19:49:41Z
   docs/instructions/CLAUDE_CODE_ADDENDUM_make-it-solid.md: no re-run rule
   ```
 - Why it matters: the rule and the code to run only L2 again were written after the FAIL, and the re-run used that new code. The failing log is kept and disclosed (good), but "per the rule" implies a pre-registered procedure. Also, during a network drop the "blocked path" checks pass vacuously, so the e2e run gave no L2 evidence at all. The re-run is the only L2 evidence.
-- Suggested fix: reword N60 to "a re-run rule was adopted after the event (ebabdb1, 19:42Z); the L2 FAIL stands as recorded and the PASS comes from a single re-run with the refactored check". If the rule was agreed verbally before the event, record who agreed it and when.
+- Suggested fix: reword N60 to "a re-run rule was adopted after the event (d8ce146, 19:42Z); the L2 FAIL stands as recorded and the PASS comes from a single re-run with the refactored check". If the rule was agreed verbally before the event, record who agreed it and when.
 
 ### G-7: "0 % errors in every configuration" for 7C is contradicted by the summary; N69 also names the wrong system
 - Severity: medium
@@ -172,14 +172,14 @@ the markdown exists; upstream issue/PR states match as of 2026-10-04 (`G-upstrea
 ### G-17: N73 claims a prediction was "written down before the first stress configuration finished"; git shows it only after the data
 - Severity: medium
 - Location: NOTES.md:1201-1204
-- Evidence (`G-n70-rule-timing.txt`): the stress run starts 2026-09-27T19:17:42Z (dir name / run-stress.log). Data commit a436567 is at 19:40:31Z. The "13.4" prediction and N72 first appear in 88473b0 at 19:53:26Z. No committed file before the data contains it.
-- Why it matters: the claim presents the prediction as pre-registered, but the repository cannot show that. Contrast the N70 decision rule, which is committed before the run (07bf7d8, 15:32Z).
-- Suggested fix: "prediction ≈ 13.4/s (recorded in the session before the run finished; not committed until 88473b0, after the data)", or drop the timing claim.
+- Evidence (`G-n70-rule-timing.txt`): the stress run starts 2026-09-27T19:17:42Z (dir name / run-stress.log). Data commit 4e95881 is at 19:40:31Z. The "13.4" prediction and N72 first appear in c0030fc at 19:53:26Z. No committed file before the data contains it.
+- Why it matters: the claim presents the prediction as pre-registered, but the repository cannot show that. Contrast the N70 decision rule, which is committed before the run (a16b340, 15:32Z).
+- Suggested fix: "prediction ≈ 13.4/s (recorded in the session before the run finished; not committed until c0030fc, after the data)", or drop the timing claim.
 
 ### G-18: 7C signer binaries differ between T systems although both manifests record the same commit
 - Severity: medium
 - Location: NOTES.md:1065-1067 (N68); reports/INDEPENDENCE.md:180-182
-- Evidence: `git show a0173b4:reports/aws/7c/deploy-manifest-{t5,tsame}.json` shows `git_commit` 02ae373 for both (deployed 10:18:46Z and 10:37:05Z), with binary sha256 0dd3fa23… vs 1f744909…. N68 explains the difference as "built ... at different commits". The CI list shows no commit between 02ae373 (10:07Z) and 4fd66c0 (10:54Z).
+- Evidence: `git show bcf4405:reports/aws/7c/deploy-manifest-{t5,tsame}.json` shows `git_commit` 02ae373 for both (deployed 10:18:46Z and 10:37:05Z), with binary sha256 0dd3fa23… vs 1f744909…. N68 explains the difference as "built ... at different commits". The CI list shows no commit between 799e8e9 (10:07Z) and a0eb1a0 (10:54Z).
 - Why it matters: with the same HEAD, a differing binary means the build tree or flags differed (likely a dirty tree). The stated explanation contradicts the manifests, so the provenance of the code that ran in 7C is not pinned.
 - Suggested fix: record `vcs.modified` / `go version -m` output for each deployed binary in the manifest. Correct N68 to "same recorded commit; cause of the difference not determined (possibly uncommitted changes)".
 
@@ -204,16 +204,16 @@ the markdown exists; upstream issue/PR states match as of 2026-10-04 (`G-upstrea
 
 ### G-22: N56 loosened a test assertion after an EC2 failure; NOTES describes it as per-token but the code checks totals
 - Severity: low
-- Location: NOTES.md:758-769; internal/coordinator/fanout_test.go (c46daba)
-- Evidence: `git show c46daba`: `if total != 4*reqs` became `if total < 3*reqs || total > 4*reqs`, and `if all != 5*reqs` became `if all < 3*reqs || all > 5*reqs`. A `res.Contacted != 5` check was added for `all` (hedged already had `!= 4`). NOTES says "server-side total within [3, contacted] **per token**", but the code bounds only the aggregate. The property "5 requests per token" is now asserted only through the coordinator's self-reported `Result.Contacted`.
+- Location: NOTES.md:758-769; internal/coordinator/fanout_test.go (2cf9ced)
+- Evidence: `git show 2cf9ced`: `if total != 4*reqs` became `if total < 3*reqs || total > 4*reqs`, and `if all != 5*reqs` became `if all < 3*reqs || all > 5*reqs`. A `res.Contacted != 5` check was added for `all` (hedged already had `!= 4`). NOTES says "server-side total within [3, contacted] **per token**", but the code bounds only the aggregate. The property "5 requests per token" is now asserted only through the coordinator's self-reported `Result.Contacted`.
 - Why it matters: the change is disclosed and reasonable, but it is a mid-run weakening, and the failure output that motivated it is not in the repo (G-1).
 - Suggested fix: fix the NOTES wording. Optionally count contacted requests at the transport (client side) as an independent check.
 
 ### G-23: PRIORITY_ADMISSION_V2.md §7/§8 still say the QUORUM_ABORT code change is pending
 - Severity: low
 - Location: docs/PRIORITY_ADMISSION_V2.md §7 "Interim. The code default (on) is unchanged until this rule is applied"; §8 "The code change awaits a go-ahead; it was not made in the evaluation session"
-- Evidence: 37f3c5e (N82) changed the default (cmd/grpc-proxy/main.go:33 `QUORUM_ABORT optional, off (default)`). The doc header was updated in the same commit, but §7/§8 were not.
-- Suggested fix: append "(applied in N82, 37f3c5e)" to both.
+- Evidence: 6229ee8 (N82) changed the default (cmd/grpc-proxy/main.go:33 `QUORUM_ABORT optional, off (default)`). The doc header was updated in the same commit, but §7/§8 were not.
+- Suggested fix: append "(applied in N82, 6229ee8)" to both.
 
 ### G-24: THREAT_MODEL C1 cites a wrong code line
 - Severity: low
@@ -230,7 +230,7 @@ the markdown exists; upstream issue/PR states match as of 2026-10-04 (`G-upstrea
 ### G-26: REPRO.md says make repro "will also run" on the 7A VM; it did
 - Severity: low
 - Location: reports/REPRO.md:61
-- Evidence: reports/aws/REPRO-ec2-m7i-flex.large-ap-south-1.md (PASS, attempt 3, f9c4c58).
+- Evidence: reports/aws/REPRO-ec2-m7i-flex.large-ap-south-1.md (PASS, attempt 3, f7a85b5).
 - Suggested fix: point to that file.
 
 ### G-27: THREAT_MODEL §3 clock-skew figures have no committed raw evidence
@@ -254,8 +254,8 @@ the markdown exists; upstream issue/PR states match as of 2026-10-04 (`G-upstrea
 ### G-30: HISTORY_PURGE gives the wrong commit for the accidental `.summarize` binary
 - Severity: low
 - Location: reports/HISTORY_PURGE.md:39
-- Evidence: `git log --all --format=%h -- benchmark/results/20260925T094221Z-4385a48-multihost-L1/.summarize` returns 6ebb013 (removed) and 9bb1f16 (added), not "dc9b396 (removed in the next commit)". The purge command path itself is correct.
-- Suggested fix: "9bb1f16 (removed in 6ebb013)".
+- Evidence: `git log --all --format=%h -- benchmark/results/20260925T094221Z-4385a48-multihost-L1/.summarize` returns 902119a (removed) and 69dca2e (added), not "28e61b1 (removed in the next commit)". The purge command path itself is correct.
+- Suggested fix: "69dca2e (removed in 902119a)".
 
 ### G-31: N59 ratio "1.5–1.7× later than B0" does not match the summary
 - Severity: low
@@ -263,11 +263,11 @@ the markdown exists; upstream issue/PR states match as of 2026-10-04 (`G-upstrea
 - Evidence: 7A `summary.md:148-153`: 26.3/15.7 = 1.68 (50 pods), 57.2/39.6 = 1.44 (100 pods).
 - Suggested fix: "1.4–1.7×".
 
-### G-32: 7C summary label records commit 1e77bee while NOTES and the directory say 73be90f
+### G-32: 7C summary label records commit 13237ba while NOTES and the directory say a1f2393
 - Severity: low
 - Location: benchmark/results/20260927T131349Z-73be90f-7C/summary.md:3 ("commit 1e77bee"); NOTES.md:1077 ("commit 73be90f")
-- Evidence: env.json:3 `git_commit 1e77bee…`; run-scale.log:122 shows the summary was regenerated in the scale phase at 1e77bee (after the N71 fix). Token runs ran at 73be90f.
-- Suggested fix: have the summarizer note both commits (tokens 73be90f, scale 1e77bee).
+- Evidence: env.json:3 `git_commit 1e77bee…`; run-scale.log:122 shows the summary was regenerated in the scale phase at 13237ba (after the N71 fix). Token runs ran at a1f2393.
+- Suggested fix: have the summarizer note both commits (tokens a1f2393, scale 13237ba).
 
 ### G-33: Run-time summaries for 7B and v2-noregress were replaced, not kept
 - Severity: low
@@ -290,12 +290,12 @@ the markdown exists; upstream issue/PR states match as of 2026-10-04 (`G-upstrea
 ### G-36: Mid-run assertion and rule changes recorded correctly (no loosening in N76/N82)
 - Severity: info
 - Location: NOTES.md:1283-1287, 1572-1582
-- Evidence: in `git show 8032da3` and `37f3c5e` on test files, the removed lines are only coordinator constructors. Assertions are unchanged, and `TestQuorumAbortOffByDefault` was added. A history-wide scan of removed `if …(==|!=|<|>)`/`t.Fatal` lines in `*_test.go` found loosening only in c46daba (G-22). The other removals replace superseded code paths (4ff02d3 N48, b672ab7 N77, 50985da N33) or strengthen checks (d07a8e7 adds `Controller != "v2"`; 8032da3 per-replica certs).
+- Evidence: in `git show 950e920` and `6229ee8` on test files, the removed lines are only coordinator constructors. Assertions are unchanged, and `TestQuorumAbortOffByDefault` was added. A history-wide scan of removed `if …(==|!=|<|>)`/`t.Fatal` lines in `*_test.go` found loosening only in 2cf9ced (G-22). The other removals replace superseded code paths (3790e5e N48, 10a49d9 N77, 55e5631 N33) or strengthen checks (361421d adds `Controller != "v2"`; 950e920 per-replica certs).
 
 ### G-37: v2 pre-registration verified; the QUORUM_ABORT generalisation is a design choice worth stating
 - Severity: info
 - Location: docs/PRIORITY_ADMISSION_V2.md §6-§7; NOTES.md:1554-1557
-- Evidence: rules are byte-identical at 293a919 and 37f3c5e. Ancestry and timestamps are in order (293a919 16:32Z, d07a8e7 17:11Z, CI green 17:17Z, cluster 17:19Z, data 17:47Z). N81's thresholds equal the 293a919 text (R1 0.8/10 %, R2 +0.5, R3 1.3, R4 2×, §7 +0.2/1.2×/−0.05). The §7 rule compares v2 with v2nb, both under priority admission, and its result sets the default for n48 admission, a configuration it did not measure.
+- Evidence: rules are byte-identical at fe0d537 and 6229ee8. Ancestry and timestamps are in order (fe0d537 16:32Z, 361421d 17:11Z, CI green 17:17Z, cluster 17:19Z, data 17:47Z). N81's thresholds equal the fe0d537 text (R1 0.8/10 %, R2 +0.5, R3 1.3, R4 2×, §7 +0.2/1.2×/−0.05). The §7 rule compares v2 with v2nb, both under priority admission, and its result sets the default for n48 admission, a configuration it did not measure.
 - Suggested fix: state in N82 that the abort default is decided on priority-admission data. N78's b-vs-n48 storm (4.4 vs 3.8, 40 vs 30 s) is the closest n48 evidence.
 
 ### G-38: Overload-control framing is correct (evaluated, not adopted)
@@ -306,12 +306,12 @@ the markdown exists; upstream issue/PR states match as of 2026-10-04 (`G-upstrea
 ### G-39: Removed test still cited (historical)
 - Severity: info
 - Location: NOTES.md:589 (N46 `TestAdmissionControlShedsImmediately`)
-- Evidence: the function was removed in 4ff02d3 (N48 replaced immediate shedding). N46 is historical. Only cited test name missing from the tree (`G-evidence-missing.txt`).
+- Evidence: the function was removed in 3790e5e (N48 replaced immediate shedding). N46 is historical. Only cited test name missing from the tree (`G-evidence-missing.txt`).
 
 ### G-40: Current summarizer is not backward compatible with 7A
 - Severity: info
 - Location: benchmark/summarize (HEAD) on `20260926T172317Z-8ebb806-7A-single-m7i-flex.large`
-- Evidence: HEAD adds a "Final comparison" table that reports "largest size every system reached (0 pods)". summarizer@c76eee9 reproduces the committed 7A summary exactly.
+- Evidence: HEAD adds a "Final comparison" table that reports "largest size every system reached (0 pods)". summarizer@cc1ba0e reproduces the committed 7A summary exactly.
 - Suggested fix: pin the summarizer commit in each results dir (env.json) so regeneration is unambiguous.
 
 ### G-41: CLAIMS_AUDIT row 8 formula is an approximation that is 17 % off at p = 0.1

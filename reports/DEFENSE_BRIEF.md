@@ -45,7 +45,7 @@ dropped load on its own, so many requests got only 1–2 shares (computed, then 
 peak with 32–44 % of shares wasted, meeting a rule fixed before the run. Version 1 copied DAGOR (all signers drop
 the *same* requests, using a keyed priority) plus an early abort; it failed its pre-registered rules, because a
 250 ms window held only 2–5 requests and the controller oscillated, which doubled token requests per issued token
-in a 300-pod storm (9.0 against 3.8). Version 2, pre-registered in commit 293a919 before any v2 code or data, used
+in a 300-pod storm (9.0 against 3.8). Version 2, pre-registered in commit fe0d537 before any v2 code or data, used
 1-second, 40-request windows, a shed-fraction overload signal and damping: it stopped the collapse (0.72 against 0.40 of
 peak at c = 200, waste 11 % against 47 %) but never reached 0.8 of peak and hurt retry storms (worst wait 260 s
 against 32 s, 8.1 against 4.4 requests per token). Neither was adopted, and the default stays simple deadline-aware

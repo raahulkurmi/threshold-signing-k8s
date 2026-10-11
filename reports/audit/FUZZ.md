@@ -1,6 +1,6 @@
 # Pass D: fuzzing
 
-Go native fuzzing (go1.27.1, macOS arm64), freeze commit `37f3c5e`. Harness: `reports/audit/fuzz/*_test.go`
+Go native fuzzing (go1.27.1, macOS arm64), freeze commit `6229ee8`. Harness: `reports/audit/fuzz/*_test.go`
 (package `fuzz`, under the module root so it can import `internal/...`; behind the build tag
 `auditfuzz`, so `make test` does not build it; seeds: `go test -tags auditfuzz ./reports/audit/fuzz/`). Each target ran **10 minutes** with `-parallel=2`, two targets at a time, on a machine also
 running the mutation lanes (so exec counts are lower than on an idle host). Logs: `raw/D-Fuzz*.txt`,

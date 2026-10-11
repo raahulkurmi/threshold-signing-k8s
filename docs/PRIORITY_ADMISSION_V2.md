@@ -227,10 +227,10 @@ Otherwise the default becomes `QUORUM_ABORT=off`. B stays available, and its uni
 the local simulation (B saves shares when signers queue) stay as they are.
 
 **Interim.** The code default (on) is unchanged until this rule is applied: changing it now
-would be a decision on N78 data that the rule above was written to make. *(Applied in N82, 37f3c5e:
+would be a decision on N78 data that the rule above was written to make. *(Applied in N82, 6229ee8:
 the default is now `QUORUM_ABORT=off`; Phase 12 audit G-23.)*
 
-## 8. Results (AWS, 2026-10-03; NOTES N81). Rules from 293a919, applied unchanged
+## 8. Results (AWS, 2026-10-03; NOTES N81). Rules from fe0d537, applied unchanged
 
 | Rule | v2 | Limit | Result |
 |---|---|---|---|
@@ -244,7 +244,7 @@ the default is now `QUORUM_ABORT=off`; Phase 12 audit G-23.)*
 
 **QUORUM_ABORT (§7):** (i) holds, (ii) fails (260.2 s vs 1.2 × 74.6 s), (iii) holds.
 **The default becomes `QUORUM_ABORT=off`.** The code change awaited a go-ahead and was not
-made in the evaluation session; it was **applied in N82 (37f3c5e)** (Phase 12 audit G-23).
+made in the evaluation session; it was **applied in N82 (6229ee8)** (Phase 12 audit G-23).
 
 **What v2 fixed and what it did not.**
 - Fixed:
