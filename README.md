@@ -219,20 +219,7 @@ Cloning into 'threshold-signing-k8s'...
 $ cd threshold-signing-k8s
 ```
 
-**3. Linux only: set a strict file-creation mask for this terminal.** The key tools
-refuse to write keys into a folder that other users can write to. On Ubuntu, a normal
-user's default mask (`0002`) makes the tests' temporary folders group-writable, and
-5 tests then fail. This command fixes it for the current terminal only:
-
-```console
-$ umask 022
-$ umask
-0022
-```
-
-(On macOS the default is already `0022`. Run `umask` to check.)
-
-**4. Build** (about 15 seconds the first time, because Go also downloads the
+**3. Build** (about 15 seconds the first time, because Go also downloads the
 libraries; a few seconds after that).
 
 ```console
@@ -247,7 +234,7 @@ go: downloading golang.org/x/text v0.42.0
 The `go: downloading` lines appear only the first time. Success means no line contains
 `error` and the command returns you to the prompt.
 
-**5. Run the tests** (about 4 minutes on a 10-core Mac, 8 to 11 minutes on a 4-core
+**4. Run the tests** (about 4 minutes on a 10-core Mac, 8 to 11 minutes on a 4-core
 machine). Keep the computer awake: on a laptop, run `caffeinate -i make test` on macOS,
 because a sleeping computer makes the clock-check tests fail.
 
@@ -283,7 +270,7 @@ $ echo $?
 `0` means success. Any other number means something failed; see
 [Troubleshooting](#troubleshooting).
 
-**6. Optional: check the container images** (needs Docker; about 1 minute). This builds
+**5. Optional: check the container images** (needs Docker; about 1 minute). This builds
 the coordinator and signer images and proves that no key or share is inside them.
 
 ```console
@@ -311,8 +298,8 @@ show that 2 missing signers are fine and 3 missing signers stop token issuance. 
 `sudo`, because the signing socket's folder must belong to root. It may ask for your
 password.
 
-**1. Do the [Quick start](#quick-start-build-and-run-the-tests) steps 1 to 3 first**
-(clone, `cd`, `umask 022`). You do not have to run the tests first.
+**1. Do the [Quick start](#quick-start-build-and-run-the-tests) steps 1 and 2 first**
+(clone and `cd`). You do not have to run the tests first.
 
 **2. Build the Kubernetes node image** (once per machine). kind has no ready-made image
 for Kubernetes v1.36.5, so you build one from the official release. It downloads about
@@ -417,11 +404,10 @@ $ git clone https://github.com/raahulkurmi/threshold-signing-k8s.git
 $ cd threshold-signing-k8s
 ```
 
-**2. Set the file mask and run it** (about 16 minutes on a fast connection; about 45 to
+**2. Run it** (about 16 minutes on a fast connection; about 45 to
 55 minutes on a slow one, mostly downloads):
 
 ```console
-$ umask 022
 $ make repro
 scripts/repro.sh
 == repro step: install-base-packages
@@ -447,11 +433,6 @@ Total: 946 s. Overall: **PASS**
 **It passed if** the report ends with `Overall: **PASS**`. The report is in
 `reports/REPRO.md` and each step's log is in `reports/repro-logs/`. If only the
 `make-test` step failed, read its log and see [Troubleshooting](#troubleshooting).
-
-On a fresh Ubuntu 24.04 VM (4 CPUs, 8 GB, slow connection) the two runs made for this
-README took 44 and 56 minutes. Both passed `make check-images` and `make e2e`. The
-`make-test` step failed once because of the file mask (the run without `umask 022`) and
-once because of the timing-sensitive test described in Troubleshooting.
 
 Note that `make repro` **overwrites** the committed `reports/REPRO.md` in your clone,
 which records the maintainers' own reproduction run. Run `git checkout reports/REPRO.md`
@@ -512,35 +493,6 @@ permission denied while trying to connect to the docker API at unix:///var/run/d
 Your user is not in the `docker` group yet. Run `sudo usermod -aG docker "$USER"`, then
 **log out and log back in** (or reboot). Check with `groups`: the list must include
 `docker`.
-
-### Some tests fail with "is writable by group or others (mode 0775)"
-
-```
---- FAIL: TestWrongKidRejected (0.00s)
-    failclosed_test.go:174: output directory /tmp/TestWrongKidRejected1385064652/001 is writable by group or others (mode 0775); use a directory only you can write (0700)
-```
-
-This is the file-mask problem from Quick start step 3. It happened on a fresh Ubuntu
-24.04 machine, where the default mask is `0002`. Run `umask 022` in the same terminal
-and run `make test` again. To make it permanent, add the line `umask 022` to the end of
-`~/.profile` and log in again.
-
-### `TestResponseSANCheckWithoutTLSPinning` fails with "not excluded: []"
-
-```
---- FAIL: TestResponseSANCheckWithoutTLSPinning (0.17s)
-    identity_test.go:64: endpoint 3 (answered by signer-4) not excluded: []
-```
-
-This test depends on timing and can fail on a busy machine: if three honest signers
-answer before the misrouted one, the coordinator finishes before it looks at the
-misrouted answer. It is a weakness of the test, not of the signing. It failed once in the
-six full test runs made for this README. Run just that test again:
-
-```console
-$ go test -count=1 -run TestResponseSANCheckWithoutTLSPinning ./internal/coordinator/
-ok  	frost-k8s-threshold-signing/internal/coordinator	87.467s
-```
 
 ### Wrong Go version
 
