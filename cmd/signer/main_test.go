@@ -64,7 +64,7 @@ func rewriteShare(t *testing.T, src string, mut func(*keyshare.File)) string {
 	}
 	mut(&f)
 	out, _ := json.Marshal(f)
-	p := filepath.Join(t.TempDir(), "share.json")
+	p := filepath.Join(testutil.PrivateDir(t), "share.json")
 	if err := os.WriteFile(p, out, 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -89,7 +89,7 @@ func writePriorityKey(t *testing.T, kid string) string {
 		t.Fatal(err)
 	}
 	b, _ := json.Marshal(f)
-	p := filepath.Join(t.TempDir(), prioritykey.FileName)
+	p := filepath.Join(testutil.PrivateDir(t), prioritykey.FileName)
 	if err := os.WriteFile(p, b, 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -198,7 +198,7 @@ func TestMultiShareFileRejected(t *testing.T) {
 	e := baseEnv(t, fx, 1)
 	a, _ := os.ReadFile(fx.SharePath(1))
 	b, _ := os.ReadFile(fx.SharePath(2))
-	p := filepath.Join(t.TempDir(), "all.json")
+	p := filepath.Join(testutil.PrivateDir(t), "all.json")
 	_ = os.WriteFile(p, append(a, b...), 0o600)
 	e["SHARE_FILE"] = p
 	mustFail(t, e, "exactly one share")

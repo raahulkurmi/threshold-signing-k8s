@@ -55,7 +55,7 @@ func (f *Fixture) SharePath(i int) string {
 }
 
 // Key returns a fixture backed by one 2048-bit key per test process
-// (generated once, kept in memory), written to t.TempDir().
+// (generated once, kept in memory), written to PrivateDir(t).
 func Key(t testing.TB) *Fixture {
 	t.Helper()
 	keyOnce.Do(func() {
@@ -68,7 +68,7 @@ func Key(t testing.TB) *Fixture {
 	if keyErr != nil {
 		t.Fatalf("testutil: keygen: %v", keyErr)
 	}
-	dir := t.TempDir()
+	dir := PrivateDir(t)
 	if _, err := dealer.WriteMeta(dir, keyGen); err != nil {
 		t.Fatal(err)
 	}

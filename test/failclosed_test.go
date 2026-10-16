@@ -16,7 +16,7 @@ import (
 )
 
 func writeFile(t *testing.T, name, content string) string {
-	p := filepath.Join(t.TempDir(), name)
+	p := filepath.Join(testutil.PrivateDir(t), name)
 	if err := os.WriteFile(p, []byte(content), 0o600); err != nil {
 		t.Fatal(err)
 	}

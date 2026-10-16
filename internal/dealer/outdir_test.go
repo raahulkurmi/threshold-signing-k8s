@@ -7,6 +7,7 @@ import (
 
 	"frost-k8s-threshold-signing/internal/dealer"
 	"frost-k8s-threshold-signing/internal/keyshare"
+	"frost-k8s-threshold-signing/internal/testutil"
 )
 
 func fakeKey() *dealer.Key {
@@ -66,7 +67,7 @@ func TestPrepareOutputDir(t *testing.T) {
 // TestWriteShareFilesCleansUpOnFailure (audit E-4): if any share cannot be
 // written, the shares already written in that call are removed.
 func TestWriteShareFilesCleansUpOnFailure(t *testing.T) {
-	dir := t.TempDir()
+	dir := testutil.PrivateDir(t)
 	if err := os.WriteFile(filepath.Join(dir, dealer.ShareFileName(2)), []byte("existing"), 0o600); err != nil {
 		t.Fatal(err)
 	}

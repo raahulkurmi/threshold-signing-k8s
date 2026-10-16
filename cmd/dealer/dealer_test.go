@@ -244,7 +244,7 @@ func TestRejectsWeakParameters(t *testing.T) {
 		{"--t", "6", "--n", "5"},
 	} {
 		var stdout, stderr bytes.Buffer
-		if code := run(append([]string{"--out", t.TempDir()}, args...), &stdout, &stderr, noEnv); code == 0 {
+		if code := run(append([]string{"--out", testutil.PrivateDir(t)}, args...), &stdout, &stderr, noEnv); code == 0 {
 			t.Fatalf("dealer accepted %v", args)
 		}
 		t.Logf("%v rejected: %s", args, strings.TrimSpace(stderr.String()))
@@ -358,7 +358,7 @@ func TestVaultModeWritesSharesOnlyToVault(t *testing.T) {
 	}
 
 	var stdout, stderr bytes.Buffer
-	if code := run([]string{"--out", t.TempDir(), "--vault"}, &stdout, &stderr, noEnv); code == 0 {
+	if code := run([]string{"--out", testutil.PrivateDir(t), "--vault"}, &stdout, &stderr, noEnv); code == 0 {
 		t.Fatal("--vault without VAULT_ADDR/VAULT_TOKEN succeeded")
 	}
 
@@ -412,7 +412,7 @@ func TestVaultModeRequiresHTTPS(t *testing.T) {
 	} {
 		var stdout, stderr bytes.Buffer
 		getenv := func(k string) string { return env[k] }
-		if code := run([]string{"--out", t.TempDir(), "--vault"}, &stdout, &stderr, getenv); code == 0 {
+		if code := run([]string{"--out", testutil.PrivateDir(t), "--vault"}, &stdout, &stderr, getenv); code == 0 {
 			t.Fatalf("%s: --vault accepted VAULT_ADDR %q", name, env["VAULT_ADDR"])
 		}
 		if strings.Contains(stdout.String(), "Generating") {

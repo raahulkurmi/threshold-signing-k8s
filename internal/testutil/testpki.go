@@ -26,10 +26,10 @@ type PKI struct {
 	caKey  *ecdsa.PrivateKey
 }
 
-// NewPKI creates a CA in t.TempDir().
+// NewPKI creates a CA in PrivateDir(t).
 func NewPKI(t testing.TB) *PKI {
 	t.Helper()
-	dir := t.TempDir()
+	dir := PrivateDir(t)
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
 		t.Fatal(err)
