@@ -16,12 +16,12 @@ Companion files: [MUTATION.md](MUTATION.md), [FUZZ.md](FUZZ.md), [CLAIMS_RECHECK
 
 The security core held up under every adversarial check run in this audit:
 - **Reproduction:** `make repro` on a fresh GitHub runner passed end to end (unit and integration tests, image isolation, a kind cluster on the real v1.36.5 apiserver, 19 e2e checks).
-- **Mutation testing:** 16 of the 17 required mutations are caught by the suite, and so are all extra mutations against the policy, the TLS identities and the fail-closed paths.
+- **Mutation testing:** 16 of the 17 required mutations are caught by the suite (superseded by 17/17, MUTATION.md:148), and so are all extra mutations against the policy, the TLS identities and the fail-closed paths.
 - **Fuzzing:** 11 targets ran 10 minutes each, including a differential against kube-apiserver's go-jose v2 claim parsing. No crash, no hang, and no input the policy accepted that the apiserver reads differently in an unsafe direction.
 - **Cryptography:** all 10 three-of-five subsets produced a byte-identical signature in a fresh run, and that signature equals `crypto/rsa.SignPKCS1v15` under the same key.
 
 The high findings are about **evidence and tests, not exploitable code**:
-- one required mutation survives (the binary's QUORUM_ABORT default);
+- one required mutation survives (the binary's QUORUM_ABORT default) (superseded by 17/17, MUTATION.md:148);
 - one loader property is untested;
 - four cited evidence items are missing or were overwritten;
 - one README sentence misstates independence;
@@ -387,7 +387,7 @@ Order: high first, then the medium items that change what a reader concludes, th
 
 **Exit-criteria status now:**
 - open critical/high: 8 (requires fixes 1–9);
-- executed required mutations caught: 16 of 17 (#17 survives);
+- executed required mutations caught: 16 of 17 (#17 survives) (superseded by 17/17, MUTATION.md:148);
 - fuzz crashes: 0;
 - claim sentences with evidence: no, see CLAIMS_RECHECK (CONTRADICTED / STALE / UNSUPPORTED rows);
 - fresh-clone repro: PASS.
