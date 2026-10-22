@@ -20,7 +20,7 @@ REPO="$(pwd)"
 TOPO="${1:-deploy/multihost/topology.local.env}"
 # shellcheck disable=SC1090
 source "$TOPO"
-export GOTOOLCHAIN=go1.27.2
+export GOTOOLCHAIN=go1.27.3
 
 die() { echo "deploy: $*" >&2; exit 1; }
 command -v jq >/dev/null || die "jq not found"

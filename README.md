@@ -93,7 +93,7 @@ You need these tools. The version numbers are the ones the project pins and test
 |---|---|---|---|
 | git | any recent | everything | <https://git-scm.com/downloads> |
 | make | any (GNU Make) | everything | Ubuntu: `sudo apt-get install -y make`; macOS: `xcode-select --install` |
-| Go | **1.27.2** | build, tests | <https://go.dev/dl/> |
+| Go | **1.27.3** | build, tests | <https://go.dev/dl/> |
 | Docker | Docker **Engine** on Linux; Docker Desktop on macOS (image check only) | image check, e2e | <https://docs.docker.com/engine/install/ubuntu/>, <https://docs.docker.com/desktop/setup/install/mac-install/> |
 | kind | **v0.31.0** | e2e | <https://kind.sigs.k8s.io/docs/user/quick-start/#installation> |
 | kubectl | **v1.36.5** | e2e | <https://kubernetes.io/docs/tasks/tools/> |
@@ -127,10 +127,10 @@ sudo sh get-docker.sh
 sudo usermod -aG docker "$USER"
 # Now log out and log back in (or reboot) so the new group takes effect.
 
-# 3. Go 1.27.2
+# 3. Go 1.27.3
 ARCH=$(dpkg --print-architecture)
-curl -fsSLO "https://go.dev/dl/go1.27.2.linux-$ARCH.tar.gz"
-sudo rm -rf /usr/local/go && sudo tar -C /usr/local -xzf "go1.27.2.linux-$ARCH.tar.gz"
+curl -fsSLO "https://go.dev/dl/go1.27.3.linux-$ARCH.tar.gz"
+sudo rm -rf /usr/local/go && sudo tar -C /usr/local -xzf "go1.27.3.linux-$ARCH.tar.gz"
 echo 'export PATH=/usr/local/go/bin:$PATH' >> ~/.profile
 export PATH=/usr/local/go/bin:$PATH
 
@@ -152,8 +152,8 @@ versions and does check them (see [Reproduce everything](#reproduce-everything-o
 #### Install on macOS
 
 1. **make and git:** run `xcode-select --install` and accept the dialog.
-2. **Go 1.27.2:** download and open the installer from <https://go.dev/dl/>
-   (`go1.27.2.darwin-arm64.pkg` for Apple silicon, `go1.27.2.darwin-amd64.pkg` for Intel).
+2. **Go 1.27.3:** download and open the installer from <https://go.dev/dl/>
+   (`go1.27.3.darwin-arm64.pkg` for Apple silicon, `go1.27.3.darwin-amd64.pkg` for Intel).
 3. **Docker Desktop** (only for `make check-images`):
    <https://docs.docker.com/desktop/setup/install/mac-install/>. Start it once.
 4. **gitleaks 8.30.1** (Apple silicon shown; on Intel replace `arm64` with `x64`):
@@ -176,7 +176,7 @@ see `amd64` instead of `arm64`; Docker's version number may be newer).
 
 ```console
 $ go version
-go version go1.27.2 linux/arm64
+go version go1.27.3 linux/arm64
 
 $ docker version --format '{{.Server.Version}}'
 29.9.1
@@ -496,18 +496,18 @@ Your user is not in the `docker` group yet. Run `sudo usermod -aG docker "$USER"
 
 ### Wrong Go version
 
-`go version` must show `go1.27.2`. The Makefile asks Go for exactly 1.27.2
-(`GOTOOLCHAIN=go1.27.2`), so any Go from 1.21 on downloads 1.27.2 by itself the first
+`go version` must show `go1.27.3`. The Makefile asks Go for exactly 1.27.3
+(`GOTOOLCHAIN=go1.27.3`), so any Go from 1.21 on downloads 1.27.3 by itself the first
 time. That needs internet access. With Ubuntu's own Go 1.22 it looks like this:
 
 ```console
 $ make build
 go build ./...
-go: downloading go1.27.2 (linux/arm64)
+go: downloading go1.27.3 (linux/arm64)
 ```
  If you see `go: command not found`, Go is not
 on your `PATH`: run `export PATH=/usr/local/go/bin:$PATH` (Linux) or open a new terminal
-after the macOS installer. If you see a Go older than 1.21, remove it and install 1.27.2
+after the macOS installer. If you see a Go older than 1.21, remove it and install 1.27.3
 as shown above.
 
 ### `make test` fails on a laptop with "is -404s from signer clock"

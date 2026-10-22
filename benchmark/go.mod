@@ -1,6 +1,6 @@
 module frost-k8s-threshold-signing/benchmark
 
-go 1.27.2
+go 1.27.3
 
 require (
 	frost-k8s-threshold-signing v0.0.0

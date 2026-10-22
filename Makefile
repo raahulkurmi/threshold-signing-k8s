@@ -1,5 +1,5 @@
 # frost-k8s: threshold RSA ExternalJWTSigner
-export GOTOOLCHAIN := go1.27.2
+export GOTOOLCHAIN := go1.27.3
 
 .PHONY: all build vet lint vuln repro test test-unit test-malicious test-spike check-images e2e e2e-keep e2e-down legacy
 

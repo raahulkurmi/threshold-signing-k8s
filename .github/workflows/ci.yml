@@ -15,7 +15,7 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  GO_VERSION: "1.27.2"
+  GO_VERSION: "1.27.3"
   GOTOOLCHAIN: local
   # v0.8.1 (2026.2.1, latest release) cannot read go1.27.2 export data (version 5); this is
   # go-tools master 452d5bb (2026-10-09, x/tools v0.51.0). Return to a release once 2026.2.2 ships.
