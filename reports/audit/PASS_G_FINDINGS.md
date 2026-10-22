@@ -13,7 +13,7 @@ N76 slots/noregress/stress/storm, v2 stress-storm, v2 noregress with HEAD summar
 with summarizer@cc1ba0e; 7B with summarizer@1995319 and HEAD; L1 post-fix with
 summarizer@89f9456) apart from the source-path list (`out/raw/G-regen-results.txt`);
 v2 rules R1–R5 and the §7 QUORUM_ABORT rule are byte-identical between fe0d537 and the
-freeze, fe0d537 is an ancestor of 361421d/a000c9b/6aff30f and predates the v2 cluster
+freeze, fe0d537 is an ancestor of 361421d/bec4906/6aff30f and predates the v2 cluster
 (17:19Z) and data (17:47Z) (`G-v2-prereg.txt`, `G-v2-doc-diff.txt`); PRIORITY_ADMISSION.md
 §5 is byte-identical at 10a49d9 (pre-data), 32474d0 (data) and the freeze
 (`G-prio-v1-prereg.txt`); the N70 stress rule (a16b340, 15:32Z) predates the stress run
