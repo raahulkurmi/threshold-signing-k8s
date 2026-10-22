@@ -618,6 +618,12 @@ kube-apiserver ──unix socket (dir 0700)──▶ nginx ──mTLS "lb"──
 4. **kube-apiserver** verifies tokens with the key from `FetchKeys` (also served at
    `/openid/v1/jwks`). Verification needs no signer.
 
+Two integration lessons about ExternalJWTSigner went upstream:
+[#141669](https://github.com/kubernetes/kubernetes/issues/141669) and
+[#141670](https://github.com/kubernetes/kubernetes/issues/141670) were reported upstream as
+documentation gaps; as of 23 October 2026 both await triage; one community pull request is
+open and none has been merged (NOTES N90).
+
 The repository and Go module names still say "frost" because of the first prototype
 (see [About the git history](#about-the-git-history)).
 

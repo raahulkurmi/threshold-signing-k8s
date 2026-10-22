@@ -1820,3 +1820,15 @@ Documentation only; no code changed (freeze rule N83).
 
 Review traceability is complete: every reviewer point in 6A, 6B and 6C maps to a row with a
 status and evidence.
+
+### N90. Upstream status re-checked (2026-10-23)
+Documentation only; no code changed. Supersedes the "checked 2026-10-04" status in N85 (G-15).
+- **Issues.** #141669 and #141670 are open, labelled `kind/documentation`, `sig/auth`,
+  `needs-triage`; neither has `triage/accepted`.
+- **Community pull requests.** #141673 ("docs: specify ECDSA signature encoding", for #141669)
+  was closed unmerged by its author on 2026-09-15. #141687 ("externaljwt: warn against
+  re-encoding claims in proto; add encoding contract test", for #141670) is open and unmerged
+  (`needs-ok-to-test`).
+- **Wording.** "#141669 and #141670 were reported upstream as documentation gaps; as of
+  23 October 2026 both await triage; one community pull request is open and none has been
+  merged." Used in README (How it works) and PAPER_INPUTS.
