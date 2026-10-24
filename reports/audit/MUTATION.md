@@ -54,7 +54,7 @@ was caused by an empty `secrets/` directory left by my dry run, not by X15; X15 
 **Not executed:** none of the 17. C3 (collusion) was not attempted, as instructed.
 
 **Verdict at the level the instruction states each mutation:** 16 of 17 caught; **#17 survives** (superseded by 17/17, MUTATION.md:148).
-At variant level, 7 of 33 survive: M3a, M5a, M10b, M14a, M14b, M17a (and M13a is caught only by a
+At variant level, 6 of 32 survive: M3a, M5a, M10b, M14a, M14b, M17a (and M13a is caught only by a
 30-minute hang). M3a, M5a, M14a, M14b remove one layer of a two-layer defence. They are equivalent
 mutants under the current wiring, so no test can observe them without a fixture that bypasses the
 other layer. M10b and M17a are real test gaps (findings C-1, C-2).
