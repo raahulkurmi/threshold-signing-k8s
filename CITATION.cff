@@ -1,0 +1,19 @@
+cff-version: 1.2.0
+message: "If you use this work, please cite it as below."
+title: "threshold-signing-k8s: threshold-signed Kubernetes service account tokens"
+authors:
+  - family-names: Kurmi
+    given-names: Rahul
+repository-code: "https://github.com/raahulkurmi/threshold-signing-k8s"
+url: "https://github.com/raahulkurmi/threshold-signing-k8s"
+version: e2c34de
+commit: e2c34decdaeb9382bef83f1ffe86a8426b0d7a8a
+type: software
+preferred-citation:
+  type: software
+  title: "threshold-signing-k8s: threshold-signed Kubernetes service account tokens"
+  authors:
+    - family-names: Kurmi
+      given-names: Rahul
+  year: 2026
+  url: "https://github.com/raahulkurmi/threshold-signing-k8s"

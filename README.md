@@ -33,6 +33,23 @@ What it does **not** protect against, in plain words:
 > [Trust assumptions](#trust-assumptions) and [docs/THREAT_MODEL.md](docs/THREAT_MODEL.md)
 > before relying on anything here.
 
+## Results at a glance
+
+Phase 7C: kubeadm v1.36.5 on AWS, 3 runs × 1,000 requests per configuration after 100
+warm-up, every system on the same cluster and request path. B0 is the Kubernetes in-tree
+signer, B1 a single-key external signer on the same path as T, and T the 3-of-5 threshold
+signer. Medians of runs. The overload rows come from stress tests (signers capped at 25 % CPU)
+in later sessions on the same 7C configuration.
+
+| What | Result | Source |
+|---|---|---|
+| Latency at c=1 | B0 about 2.5 ms. T-same-region adds about 21 ms (+20.6 ms), T-5-region about 149 ms (+148.7 ms), both optimistic verification | [7C summary.md](benchmark/results/20260927T131349Z-73be90f-7C/summary.md) |
+| Throughput | T plateaus near 70 tokens/s (69.8 same-region, 67.8 five-region, at c=50), bounded by signer CPU: 196.5 % of 200 % over the measured window | [7C summary.md](benchmark/results/20260927T131349Z-73be90f-7C/summary.md), [N76-slots summary.md](benchmark/results/20261003T101319Z-18ac3ac-N76-slots/summary.md) |
+| 200-pod scale-up | About the same time to all Ready for B0, B1 and T (15.5–16.7 s), with one TokenRequest per pod | [7C summary.md](benchmark/results/20260927T131349Z-73be90f-7C/summary.md) |
+| Quorum waste under overload | 29–47 % of computed shares wasted with the default admission at c ≥ 50, in the N76 stress session (30.5–45.0 %) and the v2 stress-storm session (29.1–46.5 %) | [N76-stress summary.md](benchmark/results/20261003T125216Z-18ac3ac-N76-stress/summary.md), [v2 stress-storm summary.md](benchmark/results/20261003T174726Z-a000c9b-v2-stress-storm/summary.md) |
+| Overload control | Two pre-registered admission designs, v1 and v2 priority admission adapted from DAGOR, were evaluated and not adopted: neither met its pre-registered success rules, and v2 limited collapse under sustained overload but made retry storms worse | [NOTES N78](NOTES.md#n78-n76n77-aws-evaluation-results-against-the-pre-registered-rules-2026-10-03), [NOTES N81](NOTES.md#n81-v2-aws-evaluation-results-against-the-pre-registered-rules-2026-10-03) |
+| Test strength | The Phase 12 adversarial audit caught all 17 required mutations (17/17) | [MUTATION.md](reports/audit/MUTATION.md) |
+
 ## Papers
 
 - **Systematization:** "Service-Account Token Signing in Kubernetes: A Systematization of
@@ -732,6 +749,18 @@ govulncheck), `make legacy` (checks that the old prototype still compiles).
   host network (docs/THREAT_MODEL.md §1).
 - **Errors are generic by design.** A token requester sees only `token signing failed: …`;
   which signer refused and why is in the coordinator log and the signers' audit logs (N33).
+
+## How this fits
+
+This project started the question that several later pilots build on: when a security check
+passes, what has it actually established? The pilots are
+[build-cache-leak-pilot](https://github.com/raahulkurmi/build-cache-leak-pilot),
+[parser-differential-pilot](https://github.com/raahulkurmi/parser-differential-pilot),
+[behavior-drift-pilot](https://github.com/raahulkurmi/behavior-drift-pilot) and
+[Provenance_gap](https://github.com/raahulkurmi/Provenance_gap). This project's answer for
+token signing: once the key is split, threshold signing stops offline forgery by any single
+process, but not online misuse by a compromised coordinator, which can obtain any token the
+signers' rules allow for as long as it is in control.
 
 ## Licensing and patents
 
