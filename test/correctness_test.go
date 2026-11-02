@@ -299,6 +299,8 @@ func TestSignerPolicyRejectsCoordinatorBypass(t *testing.T) {
 		},
 		"sub/claims skew": func(m map[string]any) { m["sub"] = "system:serviceaccount:kube-system:admin" },
 		"case-variant":    nil, // raw below
+		// N91: U+017F folds to s under encoding/json's field matching.
+		"unicode case-variant ſub": func(m map[string]any) { m["ſub"] = "system:serviceaccount:kube-system:admin" },
 	}
 	for name, mut := range violations {
 		var input string

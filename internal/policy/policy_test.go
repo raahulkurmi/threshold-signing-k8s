@@ -143,6 +143,19 @@ func TestPolicyRejects(t *testing.T) {
 			b := payload(t, nil)
 			return []byte(strings.Replace(string(b), `"namespace":"default"`, `"namespace":"kube-system","NAMESPACE":"default"`, 1))
 		}()},
+		// Final audit (N91): encoding/json matches field names with Unicode simple
+		// case folding, so U+017F (ſ) and U+212A (K) are case variants of s and k.
+		{name: "case-variant ſub next to sub", rule: "claims", mut: func(c map[string]any) { c["ſub"] = "system:serviceaccount:kube-system:admin" }},
+		{name: "case-variant iſs next to iss (escaped)", rule: "claims", raw: func() []byte {
+			b := payload(t, nil)
+			return []byte(strings.Replace(string(b), `"iss":`, `"i\u017fs":"https://evil.example","iss":`, 1))
+		}()},
+		{name: "Kelvin-sign Kubernetes.io next to kubernetes.io", rule: "claims", mut: func(c map[string]any) { c["Kubernetes.io"] = k8s("kube-system", "admin") }},
+		{name: "case-variant nested nameſpace", rule: "claims", raw: func() []byte {
+			b := payload(t, nil)
+			return []byte(strings.Replace(string(b), `"namespace":"default"`, `"namespace":"default","nameſpace":"kube-system"`, 1))
+		}()},
+		{name: "non-ASCII key alone", rule: "claims", mut: func(c map[string]any) { c["café"] = "x" }},
 		{name: "trailing garbage", rule: "claims", raw: append(payload(t, nil), []byte(`x`)...)},
 		{name: "second object", rule: "claims", raw: append(payload(t, nil), []byte(`{}`)...)},
 		{name: "not an object", rule: "claims", raw: []byte(`["iss"]`)},

@@ -16,6 +16,8 @@ import (
 	"regexp"
 	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 )
 
 // Config is the policy file (POLICY_FILE). All fields are required unless
@@ -152,7 +154,9 @@ func (p *Policy) MaxTokenSeconds() int64 { return p.cfg.MaxTokenSeconds }
 // encoding/json struct decoding is case-insensitive and last-wins, while
 // go-jose v2 (the apiserver's verifier) uses a case-sensitive fork; without
 // this check {"iss":"evil","ISS":"good"} would pass the policy as "good" and
-// verify as "evil".
+// verify as "evil". encoding/json matches with Unicode simple case folding
+// (strings.EqualFold), so "ſub" (U+017F) is a variant of "sub" too (N91):
+// keys are compared by foldKey, and any non-ASCII key is rejected.
 func strictObject(b []byte) (map[string]json.RawMessage, error) {
 	dec := json.NewDecoder(bytes.NewReader(b))
 	tok, err := dec.Token()
@@ -170,10 +174,13 @@ func strictObject(b []byte) (map[string]json.RawMessage, error) {
 			return nil, err
 		}
 		k := kt.(string)
-		if prev, dup := folded[strings.ToLower(k)]; dup {
+		if prev, dup := folded[foldKey(k)]; dup {
 			return nil, fmt.Errorf("duplicate or case-variant key %q (already have %q)", k, prev)
 		}
-		folded[strings.ToLower(k)] = k
+		folded[foldKey(k)] = k
+		if !isASCII(k) {
+			return nil, fmt.Errorf("non-ASCII key %q", k)
+		}
 		var v json.RawMessage
 		if err := dec.Decode(&v); err != nil {
 			return nil, err
@@ -187,6 +194,32 @@ func strictObject(b []byte) (map[string]json.RawMessage, error) {
 		return nil, errors.New("trailing data after object")
 	}
 	return out, nil
+}
+
+// foldKey maps every rune to the smallest member of its Unicode simple
+// case-folding orbit, so foldKey(a) == foldKey(b) exactly when
+// strings.EqualFold(a, b).
+func foldKey(s string) string {
+	var b strings.Builder
+	for _, r := range s {
+		m := r
+		for f := unicode.SimpleFold(r); f != r; f = unicode.SimpleFold(f) {
+			if f < m {
+				m = f
+			}
+		}
+		b.WriteRune(m)
+	}
+	return b.String()
+}
+
+func isASCII(s string) bool {
+	for i := 0; i < len(s); i++ {
+		if s[i] >= utf8.RuneSelf {
+			return false
+		}
+	}
+	return true
 }
 
 func str(obj map[string]json.RawMessage, key string) (*string, error) {
