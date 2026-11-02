@@ -190,6 +190,7 @@ which the plugin merges in via `mergeClaims(p.iss, ...)`.
   the policy with one value while the apiserver verifies the other. The policy
   therefore decodes exact keys and rejects duplicate or case-variant keys, at the top
   level and inside `kubernetes.io` (tested in `TestPolicyRejects`).
+  Extended to Unicode case folding in N91.
 - **N15. The header is checked byte-for-byte.** The signer requires the header segment
   to equal `base64url({"alg":"RS256","typ":"JWT","kid":"<kid>"})` exactly, after
   giving specific reasons for alg none/ES256/other, a wrong kid and extra fields.
@@ -1832,3 +1833,51 @@ Documentation only; no code changed. Supersedes the "checked 2026-10-04" status 
 - **Wording.** "#141669 and #141670 were reported upstream as documentation gaps; as of
   23 October 2026 both await triage; one community pull request is open and none has been
   merged." Used in README (How it works) and PAPER_INPUTS.
+
+### N91. Final audit: policy case-variant check extended to Unicode case folding
+A normal fix after the freeze (N83). It fixes the policy finding from the final security audit
+of 2026-10-28 (items 17f and 18 of that review). The commit is `fbf7f3c`.
+- **Finding.** `strictObject` detected case-variant keys with `strings.ToLower`. Go's
+  `encoding/json` matches field names with Unicode simple case folding (`strings.EqualFold`),
+  under which `ſ` (U+017F) equals `s`, but `strings.ToLower("ſ")` is still `ſ`. The policy
+  therefore accepted payloads such as `{…,"sub":"system:serviceaccount:default:default",
+  "ſub":"system:serviceaccount:kube-system:admin"}` and `{…,"iss":<issuer>,
+  "iſs":"https://evil.example"}`: 5/5 signers produced shares for the first.
+  `strings.ToLower` does map the Kelvin sign K (U+212A) to `k`, so that variant was already
+  rejected.
+- **Who is affected.** kube-apiserver v1.36.5 verifies with go-jose v2, whose JSON fork matches
+  keys case-sensitively. It reads the honest `sub` and `iss`, as the policy does, so Kubernetes
+  is **not affected** (go-jose v4's fork behaves the same). A relying party that decodes the
+  verified payload into a struct with the standard `encoding/json` **is affected**: it reads the
+  `ſ`-key value (last wins), including a namespace the `deny_namespaces` list would refuse. The
+  claim in N14 that case-variant keys are rejected held for ASCII only.
+- **Fix** (`internal/policy/policy.go`, `strictObject`). Keys are compared by `foldKey`, which
+  maps each rune to the smallest member of its simple-folding orbit, so two keys collide exactly
+  when `strings.EqualFold` says they are equal. Any key with a non-ASCII character is also
+  rejected (no claim kube-apiserver issues has one). `strictObject` decodes every object the
+  policy reads: the top level, `kubernetes.io`, `kubernetes.io.serviceaccount` and
+  `kubernetes.io.pod`. All rejections are rule `claims`; all earlier cases still pass.
+- **Tests.** New `TestPolicyRejects` cases: `ſub` next to `sub`, `iſs` next to `iss` (written as
+  the JSON escape `\u017f`), the Kelvin-sign key `Kubernetes.io` next to `kubernetes.io`,
+  `nameſpace` next to `namespace` inside `kubernetes.io`, and the non-ASCII key `café` on its
+  own. New `TestSignerPolicyRejectsCoordinatorBypass` case `unicode case-variant ſub`.
+  - Before the fix: 4 of the 5 policy cases failed (the Kelvin case passed), and the bypass
+    case failed with "5 signers produced shares".
+  - After the fix: all pass, and the bypass case gives 0/5 shares (all 403 policy).
+- **Mutation M8** (case-variant check off). The literal in `reports/audit/mutation/mutations2.sh`
+  no longer matches the changed line, so the same mutation (the duplicate check disabled with
+  `false &&`) was applied by hand. It is CAUGHT by `TestPolicyRejects/{duplicate iss key,
+  case-variant ISS key, case-variant nested namespace}`, as before. Two further mutants of the
+  new code were checked:
+  - non-ASCII check off: CAUGHT by `TestPolicyRejects/non-ASCII key alone`;
+  - `foldKey` replaced by the old `strings.ToLower`: SURVIVED, as an equivalent mutant. Once
+    every non-ASCII key is rejected, the remaining keys are ASCII, where both foldings agree.
+    The fold comparison is kept so the duplicate check states the intended rule by itself,
+    without relying on the ASCII rule.
+- **GO-2026-6443 acceptance removed.** The Go vulnerability database entry was revised on
+  2026-10-06: the grpc fix was cherry-picked to the v1.84.x branch (`d5a41119e0e3`, "cherry-pick
+  #9365 to v1.84.x"), and the v1.84.0 release contains it (GitHub compare: v1.84.0 is 3 commits
+  ahead, 0 behind). The repository already pins v1.84.0, so the upgrade asked for in N52 and N86
+  is in place. govulncheck v1.8.0 no longer reports the advisory, and `scripts/govulncheck.sh`
+  passes for the root module and `benchmark` with the entry removed from
+  `reports/ci/govulncheck-accepted.txt`.

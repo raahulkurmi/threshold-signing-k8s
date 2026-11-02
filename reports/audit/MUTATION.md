@@ -150,3 +150,4 @@ All 17 required mutations are now caught. Negative controls for the new tests:
 - E-2: with the t−1 rule removed, `TestTopologyGuard` fails on all 3 unsafe placements.
 
 Still surviving (finding C-3, OPEN): M3a, M5a, M14a, M14b; also X4 (C-4) and X5 (C-5).
+Superseded: M5a, M14a, M14b, X4, X5 are caught as of the final audit (2026-10-28); only M3a (equivalent) survives.
