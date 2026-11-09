@@ -119,8 +119,9 @@ Loosening `clock_skew_seconds` to ride out such events would widen the replay wi
 - **Policy-violating tokens, even from a compromised coordinator.** Each signer re-checks the
   header and applies its own claims policy before producing a share: wrong issuer,
   non-allowlisted audience, over-long lifetime, stale or future `iat`, non-service-account
-  or inconsistent `sub`, denied namespaces or accounts, and duplicate or case-variant JSON
-  keys (N14) are all refused (T6, T7, `TestPolicyRejects`; C2(a) in Phase 9).
+  or inconsistent `sub`, denied namespaces or accounts, duplicate or case-variant JSON
+  keys (N14; Unicode case variants such as `ſub` (U+017F) since N91), and non-ASCII keys
+  (N91) are all refused (T6, T7, `TestPolicyRejects`; C2(a) in Phase 9).
 - **A malicious signer disrupting correct signers.** Bad shares are detected by Shoup's
   proof, excluded, and attributed to the signer ID. Signing succeeds while ≥ 3 valid shares
   remain (I7: T5, `TestMaliciousShareExcludedAndAttributed`).
@@ -229,9 +230,13 @@ E1–E8 (`test/e2e/run.sh`), L1–L5 (`test/e2e/multihost.sh`); named Go tests a
   certificate** posts directly to every signer and gets **0/5 shares** for
   policy-violating claims. `TestSignerAppliesPolicy` and `TestPolicyRejects` cover each
   rule: wrong/missing iss, disallowed aud (also one disallowed among allowed), lifetime
-  above max, malformed sub (node/user subjects, bad namespace forms), deny lists, and
+  above max, malformed sub (node/user subjects, bad namespace forms), deny lists,
   duplicate and case-variant keys (`duplicate iss key`, `case-variant ISS key`,
-  `case-variant nested namespace`; N14). `TestSignerPolicyRejectsWrongHeaderDirect` and T6
+  `case-variant nested namespace`; N14), and Unicode case-variant and non-ASCII keys
+  (`case-variant ſub next to sub`, `case-variant iſs next to iss (escaped)`,
+  `Kelvin-sign Kubernetes.io next to kubernetes.io`, `case-variant nested nameſpace`,
+  `non-ASCII key alone`; N91). T7 includes `unicode case-variant ſub` (0/5 shares; N91).
+  `TestSignerPolicyRejectsWrongHeaderDirect` and T6
   `TestSignerRejectsPrehashedInput` cover header and pre-hashed input. With 2 attacker
   shares plus 0 honest shares, no token forms (T4: 2 shares cannot forge).
   *Not separately tested:* one scenario that combines the 2 real attacker shares with the
